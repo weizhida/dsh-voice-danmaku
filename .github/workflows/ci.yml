@@ -11,6 +11,17 @@
 #
 # 注意：runner 是交互式的（有桌面会话），所以 hotkey / smoke / restart 三层
 # 能真的安装全局钩子、合成按键、杀掉进程再验证自愈。
+#
+# ## 为什么要有"探测 DSH"这一步
+#
+# 有四层（typecheck / media / page / settings）必须对着**本机装好的 DSH** 跑：
+# 它们要用 @deepseek-ai/cordis、dsh-settings 的真实实现，而那几个包不在 npm 上，
+# 只随 DSH 安装分发。裸 runner 上装不出来 —— 这是结构性的，不是配置问题。
+#
+# 原来的写法是给它们加 `continue-on-error: true`，结果是**失败了却显示绿勾**：
+# 看 CI 页面的人（包括三个月后的作者）会以为这些层验证过了，而实际上它们一步
+# 都没跑成。现在改成先探测、探测不到就整步跳过 —— 页面显示灰色 skipped，
+# 语义才是准确的：这几层的门禁在本地 `npm test`。
 # ============================================================================
 name: CI
 
@@ -49,20 +60,28 @@ jobs:
       - name: 编译（TypeScript + C# 原生层）
         run: npm run build:all
 
-      # 这一层在裸 runner 上**无法**运行，是结构性的而非配置问题：
-      # 类型检查要对着 DSH 的真实类型定义（@deepseek-ai/cordis 等），
-      # 而那些包不在 npm 上，只随 DSH 安装分发。所以这里只当"尽力而为"，
-      # 真正的类型门禁靠本地 `npm test`。
-      - name: 类型检查（尽力而为，runner 上没有 DSH 时会跳过）
-        continue-on-error: true
+      # 探测本机有没有装 DSH。拿 `typecheck-setup` 当探测器，是因为它**正是**
+      # 那四层的前提（要按 DSH 的安装路径生成类型检查配置），比自己另写一套
+      # 判断更不容易与事实脱节。
+      #
+      # 这一步本身永远成功：探测不到是**预期结果**，不是错误。
+      - name: 探测本机是否装有 DSH（决定下面四层跑不跑）
+        id: dsh
         shell: pwsh
         run: |
           npm run typecheck-setup
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output "::notice::runner 上没有 DSH 安装，跳过类型检查（本地 npm test 会检查）"
-            exit 0
+          if ($LASTEXITCODE -eq 0) {
+            "present=true" >> $env:GITHUB_OUTPUT
+            Write-Output "找到 DSH 安装：下面四层照常运行。"
+          } else {
+            "present=false" >> $env:GITHUB_OUTPUT
+            Write-Output "::notice::runner 上没有 DSH 安装，依赖它的四层将被跳过 —— 它们的门禁是本地 npm test"
           }
-          npm run typecheck
+          exit 0
+
+      - name: 类型检查（对 DSH 真实类型定义）
+        if: steps.dsh.outputs.present == 'true'
+        run: npm run typecheck
 
       - name: 文档一致性巡检
         run: npm run test:docs
@@ -87,20 +106,18 @@ jobs:
       - name: 插件契约校验
         run: npm run test:plugin
 
-      # 下面两步和类型检查同一个前提：都要**对着本机装好的 DSH**跑
-      # （要用它的 dsh-settings / cordis 真实实现），而包里那几个 @deepseek-ai
-      # 依赖只随 DSH 分发、不在 npm 上。裸 runner 上它们会失败，所以按"尽力而为"
-      # 处理 —— 真正的门禁是本地 `npm test`，这一点和类型检查完全一样。
+      # 下面三层和类型检查同一个前提：要对着本机装好的 DSH 跑（用它的
+      # dsh-settings / cordis 真实实现）。理由见文件头。
       - name: 媒体键链路校验（真插件 + 真设置服务 + 真 sidecar）
-        continue-on-error: true
+        if: steps.dsh.outputs.present == 'true'
         run: npm run test:media
 
       - name: 本地桥装配校验（真插件 + 真设置服务）
-        continue-on-error: true
+        if: steps.dsh.outputs.present == 'true'
         run: npm run test:page
 
       - name: 设置集成校验（DSH 真实 SettingsProvider）
-        continue-on-error: true
+        if: steps.dsh.outputs.present == 'true'
         run: npm run test:settings
 
       - name: 热键链路校验（合成按键）
