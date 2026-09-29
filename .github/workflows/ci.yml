@@ -1,0 +1,124 @@
+# ============================================================================
+# CI —— 每次 push / PR 跑完整校验（各层的含义见 README 的表格）
+# ============================================================================
+# 为什么是 windows-latest：本插件的原生层是 Windows 专属（WH_KEYBOARD_LL 钩子
+# 与 WinForms 浮层）。必须有真实 Windows 才能编译 C# 并验证钩子链路。
+#
+# 好消息是 GitHub 的 windows runner **自带**本项目的全部非 Node 依赖：
+#   * .NET Framework 的 csc.exe（编译 sidecar 用）
+#   * Windows PowerShell 5.1（按键注入与进程管理用）
+# 所以不需要额外安装步骤，也不需要装 .NET SDK。
+#
+# 注意：runner 是交互式的（有桌面会话），所以 hotkey / smoke / restart 三层
+# 能真的安装全局钩子、合成按键、杀掉进程再验证自愈。
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 显示工具链版本（便于排查环境差异）
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          Write-Output "csc: $((Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe").FullName)"
+
+      - name: 安装开发依赖
+        run: npm ci --no-audit --no-fund
+
+      # 编译必须单独一步且失败即停：编译不过时后面所有验证都没有意义，
+      # 而且这里的错误信息比 "测试失败" 有用得多。
+      - name: 编译（TypeScript + C# 原生层）
+        run: npm run build:all
+
+      # 这一层在裸 runner 上**无法**运行，是结构性的而非配置问题：
+      # 类型检查要对着 DSH 的真实类型定义（@deepseek-ai/cordis 等），
+      # 而那些包不在 npm 上，只随 DSH 安装分发。所以这里只当"尽力而为"，
+      # 真正的类型门禁靠本地 `npm test`。
+      - name: 类型检查（尽力而为，runner 上没有 DSH 时会跳过）
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          npm run typecheck-setup
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::notice::runner 上没有 DSH 安装，跳过类型检查（本地 npm test 会检查）"
+            exit 0
+          }
+          npm run typecheck
+
+      - name: 文档一致性巡检
+        run: npm run test:docs
+
+      - name: Chrome 扩展静态检查（含权限最小化守卫）
+        run: npm run test:extension
+
+      - name: 浏览器半区契约校验（真渲染设置页）
+        run: npm run test:client
+
+      - name: 密钥遮罩校验
+        run: npm run test:mask
+
+      # 这一层专门防"把不该公开的东西推上去"：本机路径里的用户名、真实直播间号、
+      # 密钥、B 站凭证。它按 .gitignore 划出待提交的文件，所以排除规则改了也管用。
+      - name: 敏感信息入库守卫
+        run: npm run test:secrets
+
+      - name: 单元测试（状态机 / 限流 / 键码 / 装配层）
+        run: npm run test:unit
+
+      - name: 插件契约校验
+        run: npm run test:plugin
+
+      # 下面两步和类型检查同一个前提：都要**对着本机装好的 DSH**跑
+      # （要用它的 dsh-settings / cordis 真实实现），而包里那几个 @deepseek-ai
+      # 依赖只随 DSH 分发、不在 npm 上。裸 runner 上它们会失败，所以按"尽力而为"
+      # 处理 —— 真正的门禁是本地 `npm test`，这一点和类型检查完全一样。
+      - name: 媒体键链路校验（真插件 + 真设置服务 + 真 sidecar）
+        continue-on-error: true
+        run: npm run test:media
+
+      - name: 本地桥装配校验（真插件 + 真设置服务）
+        continue-on-error: true
+        run: npm run test:page
+
+      - name: 设置集成校验（DSH 真实 SettingsProvider）
+        continue-on-error: true
+        run: npm run test:settings
+
+      - name: 热键链路校验（合成按键）
+        run: npm run test:hotkey
+
+      - name: 自愈校验（杀掉 sidecar，验证自动重启）
+        run: npm run test:restart
+
+      - name: 冒烟测试（浮层置顶 / 不抢焦点 / 媒体键注册 / 无孤儿进程）
+        run: npm run test:smoke
+
+      # 失败时把原生层诊断日志附上来：它记录了钩子安装与进程生命周期，
+      # 是排查 runner 环境差异的第一手材料。
+      - name: 上传诊断日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-logs
+          path: ${{ runner.temp }}/../AppData/Local/Temp/dsh-voice-danmaku/*.log
+          if-no-files-found: ignore
+          retention-days: 7

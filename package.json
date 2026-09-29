@@ -1,0 +1,101 @@
+{
+  "name": "dsh-voice-danmaku",
+  "version": "0.1.0",
+  "description": "DSH 全局热键语音弹幕：游戏里按 F9 说话，识别结果浮在游戏上方，F10 确认发送到 B 站直播间，全程不切出游戏",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "voice",
+    "danmaku",
+    "bilibili",
+    "speech-to-text",
+    "hotkey"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "sidecar/src",
+    "sidecar/build.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "docs"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weizhida/dsh-voice-danmaku.git"
+  },
+  "homepage": "https://github.com/weizhida/dsh-voice-danmaku#readme",
+  "bugs": {
+    "url": "https://github.com/weizhida/dsh-voice-danmaku/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json && node tools/copy-client.mjs",
+    "build:client": "node tools/copy-client.mjs",
+    "build:sidecar": "node sidecar/build.mjs",
+    "build:all": "npm run build && npm run build:sidecar",
+    "typecheck-setup": "node tools/gen-tsconfig.mjs",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test-asr": "node tools/test-asr.mjs",
+    "test": "npm run typecheck-setup && npm run typecheck && npm run test:docs && npm run test:extension && npm run test:client && npm run test:mask && npm run test:secrets && npm run test:unit && npm run test:hotkey && npm run test:plugin && npm run test:media && npm run test:page && npm run test:restart && npm run test:settings && npm run test:smoke",
+    "test:docs": "node tools/check-docs.mjs",
+    "test:extension": "node tools/check-extension.mjs",
+    "test:media": "node tools/check-media-report.mjs",
+    "test:page": "node tools/check-page-bridge.mjs",
+    "test:client": "node tools/check-client.mjs",
+    "test:mask": "node tools/check-secret-mask.mjs",
+    "test:secrets": "node tools/check-secrets.mjs",
+    "test:unit": "node --experimental-test-isolation=none --test \"test/*.test.mjs\"",
+    "test:hotkey": "node tools/harness.mjs inject",
+    "test:plugin": "node tools/check-plugin.mjs",
+    "test:restart": "node tools/check-plugin.mjs --auto-restart",
+    "test:settings": "node tools/check-settings.mjs",
+    "test:smoke": "node tools/harness.mjs smoke",
+    "verify:hotkey": "node tools/harness.mjs watch",
+    "verify:media": "node tools/harness.mjs media",
+    "demo:overlay": "node tools/harness.mjs show",
+    "debug:raw": "node tools/harness.mjs raw"
+  },
+  "//peerDeps": "运行时由 DSH 宿主提供，插件不依赖自己那份（否则会出现两套库实例）。",
+  "//devDepsNote": "下面三个 @deepseek-ai 包放在 devDependencies 里并**钉死精确版本**，有两层原因：(1) 本地跑测试与类型检查时需要有它们；(2) 版本必须与 DSH 自带的那份逐位一致 —— cordis 的服务注册依赖真实实例身份，两侧版本分叉会出现极难排查的「两套实例」故障。所以这里是精确版本而不是范围，改之前先确认 DSH 用的版本。",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-settings": "0.1.5-rc.3",
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@types/node": "^22.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "~5.7.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "//why": "宿主半区会扫描 Loader 条目里的这个声明，把 lib/client.js 作为浏览器 bundle 通过 /plugins 提供。没有它设置界面里不会出现本插件 —— DSH 的设置页是客户端渲染的，宿主侧注册设置命名空间只让值可读写，不会自己长出界面。",
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

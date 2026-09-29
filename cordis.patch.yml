@@ -1,0 +1,18 @@
+# ============================================================================
+# dsh-voice-danmaku —— DSH bundle patch
+# ============================================================================
+# 本文件是插件的"挂载声明"。DSH 启动时按 bundle 层栈叠加各插件的 patch，
+# 这里把语音弹幕插件插入 Web profile 的配置树。
+#
+# 安装：
+#   dsh plugin --profile web add dsh-voice-danmaku
+# 本地开发安装（软链，改完不用重装）：
+#   dsh plugin --profile web add link:<本目录绝对路径>
+#
+# 插件自身的参数不写在这里，而是走 DSH 的用户设置（~/.dsh/settings.yaml 的
+# voice-danmaku 命名空间），这样改按键/改参数不需要动这个文件。
+# ============================================================================
+
+- insert:
+    - id: voice-danmaku
+      name: dsh-voice-danmaku

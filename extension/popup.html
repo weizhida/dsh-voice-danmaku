@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>语音弹幕桥</title>
+    <style>
+      /* 全部内联：弹窗只有一屏，不值得一个单独的样式文件。
+         颜色跟随系统深浅色，免得在深色主题下白得刺眼。 */
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --muted: #6b6b6b;
+        --line: rgba(0, 0, 0, 0.12);
+        --bg: #ffffff;
+        --field: rgba(0, 0, 0, 0.04);
+        --brand: #4d6bfe;
+        --ok: #1a9e5c;
+        --bad: #d33;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #eaeaea;
+          --muted: #9a9a9a;
+          --line: rgba(255, 255, 255, 0.14);
+          --bg: #1e1e1e;
+          --field: rgba(255, 255, 255, 0.06);
+        }
+      }
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 { margin: 0 0 4px; font-size: 14px; }
+      p.hint { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+      label { display: block; margin-top: 10px; font-size: 12px; color: var(--muted); }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+        height: 30px;
+        padding: 0 8px;
+        font: inherit;
+        color: var(--fg);
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      button {
+        margin-top: 12px;
+        width: 100%;
+        height: 32px;
+        font: inherit;
+        color: #fff;
+        background: var(--brand);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+    </style>
+  </head>
+  <body>
+    <h1>语音弹幕桥</h1>
+    <p class="hint">
+      把插件的「本地桥」参数填在这里，两边必须一致。插件设置页：设置 → 语音弹幕 → 发送通道。
+    </p>
+
+    <label for="port">端口</label>
+    <input id="port" type="number" min="1024" max="65535" placeholder="39217" />
+
+    <label for="token">口令</label>
+    <input id="token" type="text" autocomplete="off" placeholder="从插件设置页复制" />
+
+    <button id="save">保存并测试连接</button>
+    <div id="status">读取中…</div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

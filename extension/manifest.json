@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "语音弹幕桥",
+  "version": "0.1.0",
+  "description": "把 dsh-voice-danmaku 识别出的文字填进 B 站直播间输入框并点击发送。不读取、不上传任何页面数据。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://live.bilibili.com/*"],
+      "js": ["page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://live.bilibili.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "语音弹幕桥",
+    "default_popup": "popup.html"
+  }
+}

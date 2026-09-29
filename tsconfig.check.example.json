@@ -1,0 +1,16 @@
+{
+  "//": "这是 tsconfig.check.example.json —— 仅供参考的形状，不要直接使用。",
+  "//why": "类型检查要对着 DSH 真实的类型定义跑，而那些定义的路径因人而异。",
+  "//how": "运行 `npm run typecheck-setup` 会按你机器上的实际路径生成 tsconfig.check.json（已 gitignore）。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/cordis": ["<DSH>/node_modules/@deepseek-ai/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["<DSH>/node_modules/@deepseek-ai/schemastery/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-settings": ["<DSH>/node_modules/@deepseek-ai/dsh-settings/lib/types/index.d.ts"]
+    }
+  }
+}

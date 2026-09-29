@@ -1,0 +1,30 @@
+# 构建产物：lib/ 是 tsc 输出，sidecar/bin/ 是 csc 输出。
+# 两者都不入库——它们是可复现的构建结果，源码才是事实来源。
+/lib/
+/sidecar/bin/
+
+node_modules/
+*.tsbuildinfo
+
+# 类型检查配置由 `npm run typecheck-setup` 按本机 DSH 安装路径生成，
+# 因此不能入库（里面的绝对路径对别人是坏的）。形状见 tsconfig.check.example.json。
+/tsconfig.check.json
+
+# 本地验证记录（按键自检的存档，属于本机使用痕迹，不入库）
+/.verify/
+
+# 本地密钥与配置绝不能入库
+*.local.json
+.env
+.env.*
+credentials*.yaml
+# DSH 的设置文件（里面存着 ASR 密钥）。它在 ~/.dsh/ 下，正常不会出现在仓库里——
+# 这条规则是防"为了调试把配置拷进项目"这种手滑。
+settings.yaml
+
+# 编辑器与系统噪音
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
