@@ -1,22 +1,28 @@
 ﻿# ============================================================================
-# 一键安装到 DSH
+# 一键安装到 DSH（桌面端）
 # ============================================================================
 # 做三件事：
 #   1. 编译 TypeScript 插件与 C# 原生层；
-#   2. 把插件以 link: 方式装进 DSH 的 web profile（软链，改代码不用重装）；
+#   2. 把插件以 link: 方式装进 DSH 的 desktop profile（软链，改代码不用重装）；
 #   3. 打印重启提示与重启后要去哪填配置。
 #
 # 为什么用 link: 而不是复制：开发阶段改完源码只需重新 build，不需要重装插件。
 #
+# ⚠️ 必须用**桌面端自带的 CLI**，不能用 npm 上的 `dsh`：
+#    后者是网页版提供的，它会拒绝操作桌面端的 profile
+#    （报 profile "desktop" is managed exclusively by the Electron application），
+#    而且它会把插件装进 web profile —— 桌面端根本不会读那里。
+#
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/install-plugin.ps1
-#   powershell ... -File tools/install-plugin.ps1 -Profile tui     # 装到别的 profile
+#   powershell ... -File tools/install-plugin.ps1 -DshHome 'D:\DeepSeekHarness'
 #
 # 注意：本文件必须以 **UTF-8 with BOM** 保存（PowerShell 5.1 会把无 BOM 的
 # UTF-8 按 ANSI/GBK 读，中文会乱码并可能破坏语法）。
 # ============================================================================
 param(
-  [string]$Profile = 'web',
+  [string]$Profile = 'desktop',
+  [string]$DshHome = '',
   [switch]$SkipBuild
 )
 
@@ -51,14 +57,67 @@ if (-not $SkipBuild) {
 
 # --- 2. 安装到 profile -----------------------------------------------------
 Write-Output "[3/3] 安装到 profile: $Profile"
-# dsh plugin 会把参数转发给 profile 目录里的 pnpm，所以这里用 link: 指向本目录。
-& dsh plugin --profile $Profile add "link:$root"
+
+# 桌面端自带的 CLI。找它的顺序按"可靠性"排：
+#   1. 调用方显式给的 -DshHome；
+#   2. 正在运行的 DSH 进程所在的目录（最可靠 —— 用户此刻就在用它）；
+#   3. 几个常见安装位置。
+function Find-DesktopCli {
+  param([string]$Hint)
+
+  $candidates = New-Object System.Collections.Generic.List[string]
+
+  if ($Hint) {
+    $candidates.Add((Join-Path $Hint 'resources\runtime\cli\bin\dsh.cmd'))
+  }
+
+  # 正在运行的进程：从可执行文件路径反推安装目录。
+  try {
+    $proc = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path } | Select-Object -First 1
+    if ($proc) {
+      $dir = Split-Path -Parent $proc.Path
+      $candidates.Add((Join-Path $dir 'resources\runtime\cli\bin\dsh.cmd'))
+    }
+  } catch {
+    # 拿不到进程信息不算错，继续试其它位置。
+  }
+
+  $candidates.AddRange([string[]]@(
+    'D:\DeepSeekHarness\resources\runtime\cli\bin\dsh.cmd',
+    (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeekHarness\resources\runtime\cli\bin\dsh.cmd'),
+    (Join-Path $env:ProgramFiles 'DeepSeekHarness\resources\runtime\cli\bin\dsh.cmd')
+  ))
+
+  foreach ($c in $candidates) {
+    if ($c -and (Test-Path $c)) { return $c }
+  }
+  return $null
+}
+
+$cli = Find-DesktopCli -Hint $DshHome
+if (-not $cli) {
+  throw @"
+找不到桌面端自带的 CLI。
+
+请用 -DshHome 显式指定 DSH 的安装目录，例如：
+  powershell -ExecutionPolicy Bypass -File tools/install-plugin.ps1 -DshHome 'D:\DeepSeekHarness'
+
+（要找的是 <安装目录>\resources\runtime\cli\bin\dsh.cmd）
+"@
+}
+Write-Output "  使用 CLI: $cli"
+
+# 这个 CLI 会把参数转发给 profile 目录里的 pnpm，所以用 link: 指向本目录。
+& $cli plugin --profile $Profile add "link:$root"
 if ($LASTEXITCODE -ne 0) {
   throw @"
 安装失败（退出码 $LASTEXITCODE）。
-如果提示找不到 dsh 命令，请确认 DeepSeek Harness 已安装并在 PATH 中。
-也可以手工执行：
-  dsh plugin --profile $Profile add "link:$root"
+
+也可以手工执行同一条命令：
+  & "$cli" plugin --profile $Profile add "link:$root"
+
+注意：不要用 npm 上的 dsh —— 那是网页版，它拒绝操作桌面端的 profile。
 "@
 }
 
@@ -77,7 +136,8 @@ Write-Output '============================================================'
 Write-Output ' 安装完成。还差这几步才能真正用起来 —— 都需要你自己做。'
 Write-Output ''
 Write-Output ' [1] 重启 DSH（不重启插件不会加载）'
-Write-Output '       关掉 DSH 窗口 / 结束 dsh 进程，再用平时的方式启动，并刷新 Web GUI。'
+Write-Output '       托盘图标右键退出，确认任务管理器里所有 "DeepSeek Harness" 进程'
+Write-Output '       都结束了，再用平时的方式启动。只关窗口不算重启。'
 Write-Output ''
 Write-Output ' [2] 填语音识别的 API 密钥'
 Write-Output '       设置 -> 语音弹幕 -> 识别服务 -> API 密钥'
@@ -88,7 +148,9 @@ Write-Output ' [3] 装 Chrome 扩展，并把端口与口令填进去'
 Write-Output '       chrome://extensions -> 打开开发者模式 -> 加载已解压的扩展程序'
 Write-Output "       选这个目录：$root\extension"
 Write-Output '       再点扩展图标，把 设置 -> 语音弹幕 -> 发送通道 里的'
-Write-Output '       「本地桥端口」与「本地桥口令」填进去（端口默认 39217，通常只需抄口令）。'
+Write-Output '       「本地桥端口」与「本地桥口令」填进去（端口默认 39217）。'
+Write-Output '       口令**不会自动生成** —— 那一栏是空的就先自己填一串，'
+Write-Output '       扩展弹窗里要填同一份，两边必须一致。'
 Write-Output ''
 Write-Output ' [4] 打开一个已登录的 B 站直播间页面，并让它一直开着'
 Write-Output '       弹幕是这个页面替你发出去的，页面关掉就发不了。'

@@ -102,10 +102,18 @@
 
 ## 环境要求
 
+- **DeepSeek Harness 0.2（桌面端）**
+
+  **只针对 0.2 适配**，不承诺兼容更早或更晚的版本。
+
+  0.2 引入了新的插件配置模型（cordis 原生 `Config` + `volatile` 字段标记），插件是按
+  这套写的；装在 0.1.x 上**会让整个应用起不来** —— 客户端会一直等一个 0.2 已经移除的
+  服务（`settingsScope`），启动检查因此失败。后续版本如果再动这套接口，同样得重新适配。
+
 - Windows 10 / 11（原生层是 Windows 专属：键盘钩子、媒体键注册、置顶浮层）
-- Node.js ≥ 22.19
-- **不需要** .NET SDK：sidecar 用 Windows 自带的 `csc.exe` 编译
 - `ffmpeg`（录音用，见下）
+- **不需要** .NET SDK：sidecar 用 Windows 自带的 `csc.exe` 编译
+- **不需要**单独装 Node.js：桌面端自带运行时。只有要从源码构建时才需要（见「开发」）
 
 ### 依赖：ffmpeg
 
@@ -131,34 +139,46 @@ ffmpeg -version                  # 确认可用
 
 ## 安装
 
+从源码构建（可选，只为跑测试或自己改代码；`install-plugin.ps1` 会自动做这一步）：
+
 ```sh
 git clone https://github.com/weizhida/dsh-voice-danmaku.git
 cd dsh-voice-danmaku
 
 npm install                # 只装开发依赖（类型检查用）
 npm run build:all          # 编译 TypeScript 插件 + C# 原生层
-npm test                   # 全部校验（类型检查那一层需要本机装过 DSH，见"开发"）
+npm test                   # 全部校验
 ```
 
 ### 装成 DSH 插件
 
-一条命令（会先编译，再以 `link:` 方式装进 web profile）：
+一条命令（会先编译，再以 `link:` 方式装进 **desktop** profile）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/install-plugin.ps1
 ```
 
-或者手工：
+或者手工 —— **必须用桌面端自带的那个 CLI**：
 
-```sh
-dsh plugin --profile web add link:"<本目录绝对路径>"
+```powershell
+# 把 <DSH 安装目录> 换成实际路径，例如 D:\DeepSeekHarness
+& "<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "link:<本目录绝对路径>"
 ```
 
-**装完必须重启 DSH**，插件才会加载（重启会结束当前会话，所以要你来做）。
+> ⚠️ **不要用 npm 上的 `dsh`** —— 那是网页版，它会拒绝操作桌面端的 profile
+> （报 `profile "desktop" is managed exclusively by the Electron application`）。
+> 而且它把插件装进 `web` profile，桌面端根本不会读。
 
-重启后到 **设置 → 语音弹幕** 填 ASR 密钥，再把本地桥口令复制到 Chrome 扩展里（步骤见
-[扩展的安装说明](extension/README.md)）。**不需要填任何 B 站凭证** —— 见上文"弹幕怎么
-发出去"。
+**装完必须重启 DSH**（托盘退出，确认所有 `DeepSeek Harness` 进程都结束），插件才会加载。
+
+重启后到 **设置 → 语音弹幕**：
+
+1. 填 ASR 密钥；
+2. 记下**本地桥口令**，填进 Chrome 扩展的弹窗里（步骤见
+   [扩展的安装说明](extension/README.md)）。口令**不会自动生成** —— 留空时插件只能在
+   日志里提示你去填，扩展连不上桥。
+
+**不需要填任何 B 站凭证** —— 见上文"弹幕怎么发出去"。
 
 ## 用法
 
@@ -256,30 +276,36 @@ npm run verify:media      # 按提示依次按三个媒体键；然后切进游�
 
 ### 直接改配置文件
 
-设置界面右上角有「打开配置文件」，也可以直接编辑 `~/.dsh/settings.yaml`：
+设置界面右上角有「打开配置文件」，它会直接带你到**当前 profile 的补丁文件** ——
+桌面端是 `~/.dsh/profiles/desktop/cordis.patch.yml`。格式是 cordis 的补丁条目
+（`- id:` 开头的数组，而不是一个顶层键）：
 
 ```yaml
-voice-danmaku:
-  keys:
-    record: F9
-    send: F11
-    cancel: F10
-  # 普通按键在游戏里没反应时打开这一组（见上文"媒体键"）
-  mediaKeys:
-    enabled: true
-    record: AudioVolumeMute     # 静音键：按一下开始录，再按一下结束
-    send: MediaTrackNext        # 下一曲键
-    cancel: MediaPlayPause      # 播放/暂停键
-  channel:
-    roomId: '你的直播间号'      # 留空则任意直播间页面都接受
-    page:
-      port: 39217
-      token: '扩展弹窗里要填同一份口令'
-  asr:
-    apiKey: '你的密钥'
+- id: voice-danmaku
+  name: dsh-voice-danmaku
+  config:
+    keys:
+      record: F9
+      send: F11
+      cancel: F10
+    # 普通按键在游戏里没反应时打开这一组（见上文"媒体键"）
+    mediaKeys:
+      enabled: true
+      record: AudioVolumeMute     # 静音键：按一下开始录，再按一下结束
+      send: MediaTrackNext        # 下一曲键
+      cancel: MediaPlayPause      # 播放/暂停键
+    channel:
+      roomId: '你的直播间号'      # 留空则任意直播间页面都接受
+      page:
+        port: 39217
+        token: '扩展弹窗里要填同一份口令'
+    asr:
+      apiKey: '你的密钥'
 ```
 
-改动**热加载**，不需要重启。
+> ⚠️ **改完不会立刻生效。** DSH 要先应用配置、再重载插件，实测有**十几秒到一分多钟**
+> 的延迟（插件日志里能看到 `插件已卸载` → `插件已就绪` 这条时间线）。改完请耐心等，
+> 别急着反复点保存 —— 每次写入都会排队触发一次重载。
 
 > ⚠️ 唯一需要保密的是 `asr.apiKey` —— 它以明文存在这个文件里。设置页对密钥字段只
 > 显示"已设置"，不回显内容。
@@ -317,8 +343,23 @@ voice-danmaku:
 - **媒体键不会吞键**：按"下一曲"仍然会切歌 —— 它们是与系统、音乐播放器共享的，插件
   不会拦下它们。请分配给平时不用的键位。另外 `RegisterHotKey` 只派发按下、不派发抬起，
   所以媒体键**不能用"按住说话"**，交互固定为"按一下开始、再按一下结束"。
-- **注册可能被占用。** 注册失败是静默的，所以宿主会把结果写进设置页（媒体键那组会
-  显示"已注册 / 未注册"）。
+- **注册可能被占用。** `RegisterHotKey` 的失败是静默的。宿主会把结果写进日志
+  （`~/.dsh/logs/dsh-voice-danmaku.log` 里的「媒体键注册结果」那行）—— 但在
+  **DSH 0.2 上它已经无法显示在设置页**，见下一条。
+- **三项运行时状态当前不显示。** 设置页原本会显示「密钥是否已填」（圆点）、
+  「媒体键注册结果」、「本地桥连接状态」。这三项都是**宿主算出来的运行时结论**，
+  旧版靠回写设置传给界面；而 0.2 里写设置等于改插件自己的加载配置，会触发自我重载
+  （这正是早期"托盘图标每秒闪一次"的成因）。要恢复它们得走 `ctx.remote` 自定义通道，
+  目前**未实现**。要查这三件事，请看：
+  - 密钥是否已填 → 插件日志里的「密钥状态」行；
+  - 媒体键注册结果 → 插件日志里的「媒体键注册结果」行；
+  - 桥连没连上 → **Chrome 扩展弹窗里的三行自检**（比设置页原来那行更详细）。
+- **设置改动有延迟。** 改完要点「保存」，并且 DSH 需要十几秒到一分多钟才会应用
+  （写配置 → DSH 应用 → 重载插件）。这期间插件、sidecar 都会被重启一次，
+  右下角图标会短暂消失。
+- **没有"手动启动 sidecar"的按钮。** 它原本有，但机制是"改配置通知宿主"，实测延迟
+  同上，对用户等同于没反应，因此暂时移除。sidecar 现在只随 DSH 启动；若从托盘关掉了
+  它，**重启 DSH** 即可恢复。
 - **独占全屏可能压不住浮层。** 请把游戏设为"无边框窗口化"。
 - **发弹幕有平台风控风险。** 本项目带频率限制（最小间隔 + 每小时上限），但脚本化发送
   仍然违反多数平台的用户协议。请自行评估，建议保持低频使用。
