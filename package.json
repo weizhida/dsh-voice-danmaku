@@ -1,7 +1,7 @@
 {
   "name": "dsh-voice-danmaku",
   "version": "0.1.0",
-  "description": "DSH 全局热键语音弹幕：游戏里按 F9 说话，识别结果浮在游戏上方，F10 确认发送到 B 站直播间，全程不切出游戏",
+  "description": "DSH 全局热键语音弹幕：游戏里按 F9 说话，识别结果浮在游戏上方，F11 确认发送到 B 站直播间，全程不切出游戏",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -90,8 +90,10 @@
     },
     "client": {
       "//why": "宿主半区会扫描 Loader 条目里的这个声明，把 lib/client.js 作为浏览器 bundle 通过 /plugins 提供。没有它设置界面里不会出现本插件 —— DSH 的设置页是客户端渲染的，宿主侧注册设置命名空间只让值可读写，不会自己长出界面。",
+      "//inject": "dsh-api-remotes 是 0.2 起的必需项：设置页的读写都走 ctx.remote.settings（旧版的 settingsScope 服务已被整个移除），不声明它就拿不到 remote。",
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-locale"

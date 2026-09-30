@@ -48,7 +48,7 @@ ASR、B 站、配置、状态机全在主程序里。所以协议刻意做得很
 | `id` | string | — | 回执配对用 |
 | `text` | string | `""` | 要显示的主文本 |
 | `accent` | string | 上次的值 | 左侧色条颜色，`#RRGGBB` |
-| `hint` | string | `""` | 次要提示行（如"F10 发送 · F11 取消"） |
+| `hint` | string | `""` | 次要提示行（如"F11 发送 · F10 取消"） |
 | `showHint` | bool | `true` | 是否显示 `hint` |
 | `state` | string | `"shown"` | 状态标签。除了原样回传，**还用于驱动托盘图标配色**，见下 |
 
@@ -239,7 +239,7 @@ sidecar 启动时调用 `SetProcessDPIAware()`。多显示器且缩放比例不�
 # 逐条输入 JSON 看回执
 node tools/harness.mjs raw
 {"type":"ping","id":"1"}
-{"type":"show","id":"2","text":"你好","hint":"F10 发送"}
+{"type":"show","id":"2","text":"你好","hint":"F11 发送"}
 {"type":"verify","id":"3"}
 ```
 

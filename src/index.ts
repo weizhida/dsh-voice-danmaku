@@ -1,4 +1,4 @@
-﻿/**
+/**
  * dsh-voice-danmaku —— 插件入口。
  *
  * ## 这个模块唯一的职责是"装配"
@@ -18,7 +18,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis';
-import type { SettingsScope } from '@deepseek-ai/dsh-settings';
 import type Schema from '@deepseek-ai/schemastery';
 
 import {
@@ -28,7 +27,7 @@ import {
 } from './config.js';
 import { createAsrEngine } from './asr/registry.js';
 import { createRecorder, enumerateAudioDevices, type AudioRecorder } from './audio.js';
-import { DanmakuBridge, generateBridgeToken } from './bridge.js';
+import { DanmakuBridge } from './bridge.js';
 import { ffmpegMissingMessage, resolveFfmpeg } from './ffmpeg.js';
 import { VoiceDanmakuMachine, type OverlayView } from './machine.js';
 import { ComponentCache } from './wiring.js';
@@ -50,9 +49,6 @@ export const name = 'voice-danmaku';
  */
 const MAX_RESTART_ATTEMPTS = 5;
 
-/** 我们依赖的服务。`settings` 缺失时会走组合层配置，插件照常工作。 */
-export const inject = ['settings'];
-
 /**
  * 插件配置 schema，导出给 cordis 的加载器使用（它会读这个具名导出）。
  *
@@ -66,11 +62,16 @@ export const Config = ConfigSchema as unknown as Schema<VoiceDanmakuConfig>;
 /**
  * 安装插件。
  *
+ * ## 配置从哪来（DSH 0.2 起）
+ *
+ * 第二个参数就是本插件的配置，由 cordis 加载器按导出的 `Config` 解析好传进来。
+ * 旧版那套 `ctx.settings.register()` + `scope.get()/watch()/update()` 已经不在
+ * 新版的服务面上 —— 详见下面 `settings()` 的注释。
+ *
  * @param ctx - 插件上下文。
+ * @param config - 已解析的插件配置（schema 默认值已铺开）。
  */
-export function apply(ctx: Context): void {
-  /** 已注册的设置作用域。为 undefined 时说明 settings 服务不可用。 */
-  let scope: SettingsScope<VoiceDanmakuConfig> | undefined;
+export function apply(ctx: Context, config: VoiceDanmakuConfig): void {
   let sidecar: SidecarClient | undefined;
   let machine: VoiceDanmakuMachine | undefined;
   /** sidecar 自动重启的进度。 */
@@ -79,6 +80,19 @@ export function apply(ctx: Context): void {
   let disposed = false;
   let keyActions: ReadonlyMap<number, VoiceAction> = new Map();
   let mediaActions: ReadonlyMap<number, VoiceAction> = new Map();
+
+  /**
+   * 正在进行的 sidecar 启动（见 `launch()` 的说明）。
+   *
+   * ⚠️ **声明必须留在这里，不能挪到 `launch()` 旁边。** 这个位置不是随便放的：
+   * `apply()` 中段那个初始化块会**同步**调用 `startSidecar()`，而它要读这个变量。
+   * 函数声明会提升、`let` 不会 —— 写在下面就会抛
+   * "Cannot access 'launching' before initialization"，症状是
+   * **"点启动没反应"**（实测就是这么挂的）。
+   *
+   * 同一个坑在本文件里踩过两次：下面 `bridgeQueue` 的注释记录了第一次。
+   */
+  let launching: Promise<void> | undefined;
 
   /**
    * 本地桥：页面注入通道与 Chrome 扩展之间的那条线。
@@ -102,73 +116,98 @@ export function apply(ctx: Context): void {
   let bridgeQueue: Promise<void> = Promise.resolve();
   /** 插件持有的定时器，卸载时统一清掉。同理，声明必须靠前。 */
   const timers: Array<ReturnType<typeof setInterval>> = [];
+
   /**
-   * 上一次看到的"手动启动口令"值。
+   * 当前生效的配置。
    *
-   * 初值 -1 是刻意的：它表示"还没观察过"，于是第一次读到设置时只记录基线、
-   * 不触发启动 —— 否则"插件读取自己的设置"这个动作本身就会拉起 sidecar，
-   * 手动启动开关就失去意义了。
+   * ## 为什么不能直接用 `apply` 的 `config` 参数（一个真实故障）
+   *
+   * DSH 0.2 把插件配置收归 cordis 原生：加载器解析 `export const Config`，把结果
+   * 作为 `apply` 的第二个参数交进来。旧版的 `ctx.settings.register()` 已经不在这套
+   * 机制里（它还留着半条命：调用不报错、`scope.get()` 返回默认值，于是插件看起来
+   * 一切正常；但 `scope.update()` 改的是加载器内存里的配置，一改就被判定成配置变更
+   * → 插件被卸载重载 → 重载后又读回默认值 → 再写……稳定复现"每秒重启一次"。
+   * 所以新版里插件**不能写自己的配置**）。
+   *
+   * ⚠️ 但反过来也**不能假设"改设置会重载插件"**：DSH 的写入路径是
+   * `configEditor.edit(entry, …)` → `fiber.update(config)`，它**就地替换配置对象**，
+   * 只发一个 `internal/update` 事件（见 cordis 的 `fiber.ts`）。
+   *
+   * 第一版直接写 `settings() => config`，后果是**所有设置改动都不生效**，非得重启
+   * DSH 不可 —— 而这个 bug 最刺眼的症状就是设置页那个「启动」按钮完全没反应，
+   * 因为它的机制正是"递增 `launchToken`、让宿主在配置变化时把 sidecar 拉起来"。
+   *
+   * 现在跟着 `internal/update` 更新这个变量（见下面的 `applyConfig`）。
+   */
+  let current: VoiceDanmakuConfig = config;
+
+  /** 读取当前生效的配置。 */
+  const settings = (): VoiceDanmakuConfig => current;
+
+  // -------------------------------------------------------------------------
+  // 配置生效
+  // -------------------------------------------------------------------------
+
+  /**
+   * 上一次看到的「手动启动口令」。
+   *
+   * 初值 -1 表示"还没观察过"：第一次只记基线、不触发启动 —— 否则"插件读取自己的
+   * 配置"这个动作本身就会拉起 sidecar，那个按钮也就没意义了。
    */
   let lastLaunchToken = -1;
 
-  /** 读取当前生效的设置。 */
-  const settings = (): VoiceDanmakuConfig => {
-    if (scope === undefined) throw new Error('设置服务尚未就绪');
-    return scope.get();
-  };
+  /**
+   * 把一份配置应用上去。
+   *
+   * 首次加载和之后每次配置变更都走这里，所以"配置影响到的部分"只有一份实现 ——
+   * 这是旧版 `scope.watch()` 回调的等价物。
+   */
+  function applyConfig(next: VoiceDanmakuConfig): void {
+    current = next;
 
-  // -------------------------------------------------------------------------
-  // 设置注册
-  // -------------------------------------------------------------------------
-  ctx.inject(['settings'], (settingsCtx) => {
-    scope = settingsCtx.settings.register(SETTINGS_NAMESPACE, ConfigSchema, {
-      applies: 'live',
-      validate: (value) => {
-        // 跨字段校验：同一个键不能兼两个动作，否则行为不可预测。
-        // schema 表达不了这种"字段之间"的约束，所以放在 validate 里。
-        assertDistinct(value.keys, '按键');
-        // 媒体键只在启用时校验：默认值是给"打开开关"准备的建议键位，
-        // 用户没启用时不该因为没动过的默认值而被拦住改不了别的设置。
-        if (value.mediaKeys.enabled) assertDistinct(value.mediaKeys, '媒体键');
+    // 跨字段校验（同一个键不能兼两个动作）schema 表达不了，所以放在这里。
+    // **不阻止启动**：用户很可能正要去设置页改它，卡住启动只会让他连设置页都打不开。
+    try {
+      assertDistinct(next.keys, '按键');
+      // 媒体键只在启用时校验：默认值是给"打开开关"准备的建议键位，
+      // 用户没启用时不该因为没动过的默认值而被拦住。
+      if (next.mediaKeys.enabled) assertDistinct(next.mediaKeys, '媒体键');
+    } catch (cause) {
+      logError('按键配置有冲突:', cause instanceof Error ? cause.message : String(cause));
+    }
+
+    rebuildKeyMap(next);
+    if (sidecar?.running === true) sidecar.configure(toSidecarConfig(next));
+
+    // 「手动启动」：设置页的按钮递增 `launchToken`，值一变就拉起 sidecar。
+    // 用"值变了"而不是"值为真"判断 —— 这样连点两次能各自触发一次，
+    // 也不会因为"读了一次配置"就误启动。
+    const token = next.behavior.launchToken;
+    if (token !== lastLaunchToken) {
+      const firstObservation = lastLaunchToken === -1;
+      lastLaunchToken = token;
+      if (!firstObservation) {
+        log('收到手动启动请求，正在拉起…');
+        void startSidecar().catch((cause: unknown) => {
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          logError('手动启动失败:', reason);
+        });
       }
-    });
+    }
 
-    // 设置变化时重新计算按键表并下发，不需要重启。
-    scope.watch((next) => {
-      rebuildKeyMap(next);
-      if (sidecar?.running === true) sidecar.configure(toSidecarConfig(next));
+    // 桥跟着通道配置起停（串行，见 queueSyncBridge）。
+    queueSyncBridge(next);
+  }
 
-      // 手动启动：设置页的「启动」按钮会递增 launchToken，值一变就拉起 sidecar。
-      // 用"值变了"而不是"值为真"判断，这样连续点两次能各自触发一次。
-      const token = next.behavior.launchToken;
-      if (token !== lastLaunchToken) {
-        const firstObservation = lastLaunchToken === -1;
-        lastLaunchToken = token;
-        // 首次观察只是记录基线，不能当成一次点击（否则"读过一次设置"就会启动）。
-        if (!firstObservation) {
-          log('收到手动启动请求，正在拉起…');
-          void startSidecar().catch((cause: unknown) => {
-            const reason = cause instanceof Error ? cause.message : String(cause);
-            logError('手动启动失败:', reason);
-          });
-        }
-      }
-
-      // 同步"哪些密钥已填写"的派生字段，供设置页显示遮罩。
-      syncSecretStatus(next);
-
-      // 本地桥跟着通道选择起停（串行，见 queueSyncBridge）。
-      queueSyncBridge(next);
-    });
-
-    rebuildKeyMap(scope.get());
-    syncSecretStatus(scope.get());
-    // 首次也要同步一次：桥必须在插件启动时就起来，而不是等到第一次发送 ——
-    // 扩展会自己来连，桥晚起一秒它就多转一圈。
-    queueSyncBridge(scope.get());
-    startBridgeStatusWatch();
-    log('设置已注册，命名空间:', SETTINGS_NAMESPACE);
+  // 配置变更走 cordis 的 fiber 更新事件（原因见 `current` 的注释）。
+  ctx.on('internal/update', (next: VoiceDanmakuConfig) => {
+    applyConfig(next);
   });
+
+  // 首次应用。桥必须在插件启动时就起来，而不是等到第一次发送 ——
+  // 扩展会自己来连，桥晚起一秒它就多转一圈。
+  applyConfig(config);
+  log('插件已就绪，配置命名空间:', SETTINGS_NAMESPACE);
 
   /**
    * 把"哪些密钥已填写"回写到 `behavior.secretStatus`。
@@ -184,32 +223,21 @@ export function apply(ctx: Context): void {
    *
    * 只在结果变化时写，避免每次设置变动都产生一次无意义的写入（那会污染设置文档）。
    */
-  function syncSecretStatus(config: VoiceDanmakuConfig): void {
-    if (scope === undefined) return;
-
+  function logSecretStatus(config: VoiceDanmakuConfig): void {
     // 这是"哪些字段算密钥"的唯一定义处，新增密钥字段时记得加进来。
     // 现在只剩 ASR 密钥一个 —— 弹幕通道不再需要任何凭证（请求由页面自己发）。
     const candidates: Array<[string, string]> = [
       ['asr.apiKey', config.asr.apiKey]
     ];
-    const next = candidates
+    const present = candidates
       .filter(([, value]) => value.trim().length > 0)
       .map(([path]) => path);
-
-    const current = config.behavior.secretStatus;
-    if (current.length === next.length && current.every((item, i) => item === next[i])) return;
 
     // 打一行日志。这一步是刻意加的：设置页上"密钥是否被识别为已填写"是一个
     // 只能间接观察的状态，排查时最缺的就是"宿主到底算出了什么"。
     // 有这行就不必再写临时脚本去猜（我为此浪费过好几次时间，而且临时脚本本身
     // 出过三次错，每次都产生假线索）。
-    log(`密钥状态: [${next.join(', ')}]`);
-
-    void scope.update({ behavior: { secretStatus: next } }).catch((cause: unknown) => {
-      // 写失败不影响功能，只是遮罩会不准，所以只记日志。
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      warn('回写密钥状态失败:', reason);
-    });
+    log(`密钥状态: [${present.join(', ')}]`);
   }
 
   /**
@@ -221,19 +249,12 @@ export function apply(ctx: Context): void {
    *
    * 只在变化时写，避免每次 configure 都产生一次设置写入。
    */
-  function syncMediaReport(raw: string): void {
-    if (scope === undefined) return;
-
+  function logMediaReport(raw: string): void {
     // `ok=` 表示"一个都没注册，因为压根没启用"。那是**没有信息**，不是"注册结果
-    // 为空"，所以不落盘 —— 否则用户文档里会多一个恒为 `ok=` 的键，
-    // 设置页也得为它多写一个分支。
+    // 为空"，所以连日志都不必打 —— 否则每次启动都刷一行无意义的输出。
     const report = raw === 'ok=' ? '' : raw;
-
-    if (scope.get().behavior.mediaKeysReport === report) return;
-    void scope.update({ behavior: { mediaKeysReport: report } }).catch((cause: unknown) => {
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      warn('回写媒体键注册结果失败:', reason);
-    });
+    if (report.length === 0) return;
+    log('媒体键注册结果:', report);
   }
 
   /**
@@ -247,13 +268,11 @@ export function apply(ctx: Context): void {
    *
    * ## 口令为什么要回写
    *
-   * 用户没有理由自己发明一个口令，所以留空时宿主生成一个写回设置 ——
-   * 但它必须**看得见**（用户要把它复制到扩展选项页里），因此它不是 secret 字段。
-   * 这和 `secretStatus` 那种"派生状态"不同：这是一个真实生效的配置值。
+   * ⚠️ 新版**不再自动生成口令**：那需要回写配置，而新版回写配置会把插件自己
+   * 重载掉（见 `settings()` 的注释）。口令现在完全由用户在设置页填写 ——
+   * 它是真实生效的配置值，本来就该由用户掌握。
    */
   async function syncBridge(config: VoiceDanmakuConfig): Promise<void> {
-    if (scope === undefined) return;
-
     if (config.channel.provider !== 'page') {
       if (bridge.snapshot.listening) {
         await bridge.stop();
@@ -265,16 +284,13 @@ export function apply(ctx: Context): void {
 
     const token = config.channel.page.token.trim();
     if (token.length === 0) {
-      const generated = generateBridgeToken();
-      log('本地桥口令为空，已生成一个新的并写回设置');
-      try {
-        await scope.update({ channel: { page: { token: generated } } });
-      } catch (cause) {
-        const reason = cause instanceof Error ? cause.message : String(cause);
-        warn('回写本地桥口令失败:', reason);
-        return;
-      }
-      // 这次写入会再触发一遍本函数（设置变化），那时口令已经就位。
+      // 新版不能再回写配置（写了会重载插件，见 `settings()` 的注释），所以这里
+      // 只能报错让用户自己填。**不生成临时口令** —— 临时口令每次重启都换一个，
+      // 用户得反复把新口令抄进扩展，比让他填一次麻烦得多。
+      logError(
+        '本地桥口令为空，浏览器扩展连不上。请在 设置 → 语音弹幕 → 发送通道 ' +
+        '填写「本地桥口令」（扩展弹窗里要填同一份）。'
+      );
       return;
     }
 
@@ -319,36 +335,9 @@ export function apply(ctx: Context): void {
       });
   }
 
-  /**
-   * 把桥的连接状态写进设置，供设置页显示。
-   *
-   * ## 为什么这件事必须定期做
-   *
-   * 别处的派生字段（密钥是否已填、媒体键注册结果）都是"事件驱动"的：收到回执
-   * 就写一次。桥的状态不是事件 —— 扩展**随时可能**关掉标签页、禁用扩展、
-   * 退出浏览器，而这些都不会给插件发任何消息。所以只能定期看。
-   *
-   * 5 秒一次、且只在结论变化时写：设置文档不该被无意义的写入刷满。
-   */
-  function startBridgeStatusWatch(): void {
-    const timer = setInterval(() => {
-      if (disposed || scope === undefined) return;
-      const next = describeBridgeStatus();
-      if (scope.get().channel.page.status === next) return;
-      void scope.update({ channel: { page: { status: next } } }).catch((cause: unknown) => {
-        const reason = cause instanceof Error ? cause.message : String(cause);
-        warn('回写本地桥状态失败:', reason);
-      });
-    }, 5000);
-    // 定时器不该拖住插件卸载。
-    if (typeof timer.unref === 'function') timer.unref();
-    timers.push(timer);
-  }
-
-  /** 把桥的几段链路压缩成一个状态值。 */
+  /** 把桥的几段链路压缩成一个状态值。只用于日志 —— 见下面 `logBridgeStatus` 的注释。 */
   function describeBridgeStatus(): string {
-    if (scope === undefined) return '';
-    if (scope.get().channel.provider !== 'page') return 'off';
+    if (settings().channel.provider !== 'page') return 'off';
     const snapshot = bridge.snapshot;
     if (!snapshot.listening) return 'down';
     if (!bridge.extensionOnline) return 'waiting';
@@ -423,22 +412,22 @@ export function apply(ctx: Context): void {
   });
 
   async function start(): Promise<void> {
-    // 等设置注册完成（ctx.inject 是异步触发的）。
-    const config = await waitForSettings();
     if (disposed) return;
 
-    // 启动前的配置缺口只汇报一次；之后配置变化由设置监听负责。
-    reportConfigurationGaps(config);
+    // 配置缺口只汇报一次（每次插件重新加载会再跑一遍，那是预期行为）。
+    reportConfigurationGaps(current);
+    logSecretStatus(current);
 
-    // 关闭了"随 DSH 启动"就不拉起 sidecar —— 不装全局钩子、不留托盘图标。
-    // 用户需要时在设置页点「启动」。
-    if (!config.behavior.autoStart) {
+    // 关闭「随 DSH 启动」时不拉起 sidecar —— 不装全局钩子、不留托盘图标。
+    // 例外：用户在设置页点过「启动」（`launchToken` 非零），那是明确的意图，
+    // 即便总开关是关的也该照做。
+    if (!current.behavior.autoStart && current.behavior.launchToken === 0) {
       log('已按设置关闭"随 DSH 启动"。需要时在 设置 → 语音弹幕 点「启动」。');
       return;
     }
 
     await launch();
-    log('就绪。按', config.keys.record, '开始说话。');
+    log('就绪。按', current.keys.record, '开始说话。');
   }
 
   // -------------------------------------------------------------------------
@@ -478,7 +467,7 @@ export function apply(ctx: Context): void {
       // 而传错的表现是"设置页上那行状态永远不出现"—— 完全静默，没人会发现。
       // tools/check-media-report.mjs 用一个真 sidecar 把这件事钉住了。
       log('sidecar 已应用配置，媒体键:', applied.mediaKeysReport || '（未启用）');
-      syncMediaReport(applied.mediaKeysReport);
+      logMediaReport(applied.mediaKeysReport);
     });
     client.on('failure', (cause) => logError('sidecar:', cause.message));
     client.on('exited', ({ code, signal, intentional }) => {
@@ -489,7 +478,7 @@ export function apply(ctx: Context): void {
       // 用户从托盘菜单点的退出：必须尊重，不能自愈重启。
       // 否则表现为"点了退出它又自己冒出来，根本关不掉"。
       if (intentional) {
-        log('sidecar 已按用户要求退出。要恢复语音功能，请重启 DSH。');
+        log('sidecar 已按用户要求退出。要恢复语音功能，请在 设置 → 语音弹幕 点「启动」。');
         return;
       }
 
@@ -506,12 +495,37 @@ export function apply(ctx: Context): void {
   }
 
   /**
-   * 启动（或重启）sidecar，成功后就绪。
+   * 启动（或重启）sidecar —— 串行化的外壳。
    *
-   * 这是唯一的启动入口：首次启动、崩溃恢复、启动失败重试都走这里，
-   * 所以"客户端创建 + 事件接线 + 进程拉起 + 机器重建"这套动作只有一份实现。
+   * ## 为什么要串行（一个真实故障）
+   *
+   * `launch()` 有**两个入口**：`start()`（随 DSH 启动）和 `startSidecar()`
+   * （设置页点「启动」）。而新版 DSH 里"点启动"= 客户端写 `launchToken`
+   * = 配置变更 = **重载插件**，于是插件重新加载时这两个入口会在同一时刻各调一次
+   * `launch()`。
+   *
+   * 而 `doLaunch()` 开头有"上一个实例没退干净就先停掉它"的保险逻辑（见那里的
+   * 注释），于是后到的那个会把先到的**刚拉起来的**进程杀掉 —— 两个都起不来。
+   * 用户看到的就是"随 DSH 启动是好的，但关掉之后点启动没反应"（前者只有一个
+   * 入口，所以没事）。
+   *
+   * 这里让并发调用复用同一个 promise：同一时刻只会真正启动一次。
    */
-  async function launch(): Promise<void> {
+  function launch(): Promise<void> {
+    if (launching !== undefined) return launching;
+    launching = doLaunch().finally(() => {
+      launching = undefined;
+    });
+    return launching;
+  }
+
+  /**
+   * 真正干活的那个（不要直接调它，走 `launch()`）。
+   *
+   * 首次启动、崩溃恢复、启动失败重试、手动启动都最终落到这里，
+   * 所以"客户端创建 + 事件接线 + 进程拉起 + 机器重建"只有一份实现。
+   */
+  async function doLaunch(): Promise<void> {
     const client = ensureClient();
 
     // 保险：确认上一个实例真的退出了再拉起新的。
@@ -591,19 +605,6 @@ export function apply(ctx: Context): void {
         }
       })();
     }, delayMs);
-  }
-
-  /** 轮询等待设置作用域就绪。 */
-  async function waitForSettings(timeoutMs = 10000): Promise<VoiceDanmakuConfig> {
-    const deadline = Date.now() + timeoutMs;
-    while (scope === undefined) {
-      if (disposed) throw new Error('插件已卸载');
-      if (Date.now() > deadline) {
-        throw new Error('等待设置服务超时。DSH 可能未加载 settings 服务。');
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-    }
-    return scope.get();
   }
 
   /** 把配置缺口写进日志。不阻止启动 —— 用户可能只想先看浮层效果。 */

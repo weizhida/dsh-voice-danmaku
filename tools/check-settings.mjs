@@ -124,8 +124,8 @@ try {
 const defaults = scope.get();
 const requiredPaths = [
   ['keys', 'record', 'F9'],
-  ['keys', 'send', 'F10'],
-  ['keys', 'cancel', 'F11'],
+  ['keys', 'send', 'F11'],
+  ['keys', 'cancel', 'F10'],
   // 媒体键默认关闭：它们是与系统和别的程序共享的键，不主动去抢。
   ['mediaKeys', 'enabled', false],
   ['mediaKeys', 'record', 'AudioVolumeMute'],
@@ -171,7 +171,7 @@ check(missing === 0, `schema 默认值全部铺开（${requiredPaths.length} 个
 await scope.update({ keys: { record: 'PageUp' }, channel: { roomId: '12345' } });
 const overridden = scope.get();
 check(overridden.keys.record === 'PageUp', '用户值覆盖默认值', overridden.keys.record);
-check(overridden.keys.send === 'F10', '未覆盖的字段仍取默认值', overridden.keys.send);
+check(overridden.keys.send === 'F11', '未覆盖的字段仍取默认值', overridden.keys.send);
 check(overridden.channel.roomId === '12345', '用户值写入嵌套段', overridden.channel.roomId);
 check(provider.stored[SETTINGS_NAMESPACE]?.keys?.record === 'PageUp',
   '用户值被 persist 到存储', JSON.stringify(provider.stored[SETTINGS_NAMESPACE]?.keys));
@@ -218,7 +218,7 @@ try {
   rejected = true;
 }
 check(rejected, '跨字段校验拦住了冲突的按键写入');
-check(scope.get().keys.send === 'F10',
+check(scope.get().keys.send === 'F11',
   '被拒绝的写入没有污染当前值', scope.get().keys.send);
 
 // --- 6. secret 字段 ----------------------------------------------------------

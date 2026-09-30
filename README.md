@@ -26,7 +26,7 @@
 
 该插件由 DeepSeek Harness 使用 DeepSeek-V4.1-Flash 开发。
 
-按 `F9` 说话 → 识别结果浮在游戏画面上方 → 按 `F10` 确认发送 → 按 `F11` 取消。
+按 `F9` 说话 → 识别结果浮在游戏画面上方 → 按 `F11` 确认发送 → 按 `F10` 取消。
 （三个键都可以在设置里改。）
 浮层置顶显示但不抢焦点、不接收鼠标，游戏照常操作。
 
@@ -167,8 +167,8 @@ dsh plugin --profile web add link:"<本目录绝对路径>"
 | 键 | 动作 |
 |---|---|
 | `F9` | 按一下开始录音，再按一下结束并开始识别 |
-| `F10` | 确认发送 |
-| `F11` | 取消 |
+| `F11` | 确认发送 |
+| `F10` | 取消 |
 
 识别结果浮在屏幕上方；`behavior.confirmTimeoutSeconds`（默认 8 秒）内没有操作会自动
 取消 —— 游戏里手一忙就会忘记它还挂着，不自动收尾迟早会误发。
@@ -201,7 +201,7 @@ npm run verify:media      # 按提示依次按三个媒体键；然后切进游�
    手柄/耳机上的那个媒体键** —— 键名会自动填进框里，不用去查什么
    `VK_MEDIA_PLAY_PAUSE = 179`。
 3. 保存。下方会显示注册结果，例如
-   `媒体键注册结果：已注册：AudioVolumeMute、MediaPlayPause`。如果出现「未注册」，
+   `媒体键注册结果：已注册：AudioVolumeMute、MediaTrackNext`。如果出现「未注册」，
    说明那个键被别的程序占用了，换一个即可。
 
 保存后**立刻生效，不需要重启**（设置是热加载的）。
@@ -209,7 +209,7 @@ npm run verify:media      # 按提示依次按三个媒体键；然后切进游�
 媒体键与普通按键**同时生效**，互不冲突：游戏外用 F9/F10/F11，游戏里用媒体键。
 三个动作都是"按一下"：录音键按一下开始、再按一下结束并识别；发送/取消各按一下。
 
-也可以直接手填键名或键码（`AudioVolumeMute`、`MediaPlayPause`、`179`…），可用名字见
+也可以直接手填键名或键码（`AudioVolumeMute`、`MediaTrackNext`、`179`…），可用名字见
 `src/keys.ts` 的表。
 
 > 如果媒体键在该游戏里也收不到，剩下可考虑的方向（本项目**未实现**，仅作记录）：
@@ -262,14 +262,14 @@ npm run verify:media      # 按提示依次按三个媒体键；然后切进游�
 voice-danmaku:
   keys:
     record: F9
-    send: F10
-    cancel: F11
+    send: F11
+    cancel: F10
   # 普通按键在游戏里没反应时打开这一组（见上文"媒体键"）
   mediaKeys:
     enabled: true
     record: AudioVolumeMute     # 静音键：按一下开始录，再按一下结束
-    send: MediaPlayPause        # 播放/暂停键
-    cancel: MediaTrackNext      # 下一曲键
+    send: MediaTrackNext        # 下一曲键
+    cancel: MediaPlayPause      # 播放/暂停键
   channel:
     roomId: '你的直播间号'      # 留空则任意直播间页面都接受
     page:
@@ -289,12 +289,12 @@ voice-danmaku:
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | `keys.record` | `F9` | 开始/停止录音 |
-| `keys.send` | `F10` | 发送弹幕 |
-| `keys.cancel` | `F11` | 取消当前识别结果 |
+| `keys.send` | `F11` | 发送弹幕 |
+| `keys.cancel` | `F10` | 取消当前识别结果 |
 | `mediaKeys.enabled` | `false` | 是否启用媒体键（默认关：它们是共享资源，不主动去抢） |
 | `mediaKeys.record` | `AudioVolumeMute` | 静音键，按一下开始录音、再按一下结束 |
-| `mediaKeys.send` | `MediaPlayPause` | 播放/暂停键，确认发送 |
-| `mediaKeys.cancel` | `MediaTrackNext` | 下一曲键，取消 |
+| `mediaKeys.send` | `MediaTrackNext` | 下一曲键，确认发送 |
+| `mediaKeys.cancel` | `MediaPlayPause` | 播放/暂停键，取消 |
 | `overlay.anchorXPercent` | `50` | 浮层水平位置 |
 | `overlay.marginTop` | `0` | 浮层距屏幕上边缘 |
 | `overlay.clickThrough` | `true` | 点击穿透到游戏 |
@@ -304,7 +304,7 @@ voice-danmaku:
 | `asr.modelOptions` | 三个模型名 | 只是下拉框里的候选，**不影响识别**；改它立即生效 |
 | `behavior.consumeKeys` | `true` | 普通热键是否对游戏隐藏（媒体键永远不隐藏） |
 
-按键用虚拟键码配置，写名字也行（`F9`、`PageUp`、`Num0`、`MediaPlayPause`…）。
+按键用虚拟键码配置，写名字也行（`F9`、`PageUp`、`Num0`、`MediaTrackNext`…）。
 
 完整字段与默认值见 `src/config.ts`（每一行都带人话说明）。
 

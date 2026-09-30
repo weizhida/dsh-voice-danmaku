@@ -38,7 +38,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const exePath = join(root, 'sidecar', 'bin', 'dsh-voice-danmaku-sidecar.exe');
 
-/** 默认热键：F9 录音/停止，F10 发送，F11 取消。 */
+/** 默认热键：F9 录音/停止，F11 发送，F10 取消。 */
 const DEFAULT_KEYS = [0x78, 0x79, 0x7a];
 
 /** 冒烟用的媒体键：静音 / 播放暂停 / 下一曲。 */
@@ -284,7 +284,7 @@ async function smoke() {
       type: 'show', id: 'show-1', state: 'confirm',
       text: '这是一条用于自检的示例弹幕文本，用来确认浮层排版正常。',
       accent: '#3B82F6',
-      hint: 'F10 发送 · F11 取消 · F9 重说',
+      hint: 'F11 发送 · F10 取消 · F9 重说',
       showHint: true
     });
     const shown = await sidecar.waitFor((m) => m.type === 'shown', 4000, 'shown');
@@ -349,7 +349,7 @@ async function show() {
 
   sidecar.send({
     type: 'show', id: 'show', state: 'confirm', text,
-    accent: '#3B82F6', hint: 'F10 发送 · F11 取消 · F9 重说', showHint: true
+    accent: '#3B82F6', hint: 'F11 发送 · F10 取消 · F9 重说', showHint: true
   });
   await sidecar.waitFor((m) => m.type === 'shown', 4000, 'shown');
 

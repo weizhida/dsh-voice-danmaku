@@ -407,7 +407,7 @@ describe('状态机 —— 边界与拒绝', () => {
   });
 
   it('取消键恢复成纯取消：超长时按它也是取消，不是截断', async () => {
-    // 这一条防的是一个很糟的误解：用户按 F11 想放弃这条，结果话被砍了一半还留着。
+    // 这一条防的是一个很糟的误解：用户按 F10 想放弃这条，结果话被砍了一半还留着。
     const harness = await advanceToConfirm(createHarness(), '一'.repeat(25));
 
     await harness.machine.handleKey('cancel');

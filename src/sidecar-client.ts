@@ -392,7 +392,12 @@ export class SidecarClient extends EventEmitter {
         // sidecar 即将退出。它会在 intentional=true 时告诉我们"这是用户从托盘
         // 点的退出"，据此抑制自动重启。注意这个消息可能早于 close/exit 到达，
         // 所以在这里就把标记立起来。
-        if (message.intentional === true) this.userRequestedExit = true;
+        //
+        // ⚠️ 必须排除 `stopping`：我们自己调 `stop()` 让它退出时，它**同样**会报
+        // `intentional: true`（从 sidecar 的视角，"收到退出指令"就是主动退出）。
+        // 不排除的话，插件每次卸载都会打一句"sidecar 已按用户要求退出" —— 排查
+        // "点启动没反应"时我被这句话带偏过一次，误以为是你手动关的。
+        if (message.intentional === true && !this.stopping) this.userRequestedExit = true;
         break;
       case 'pong':
         break;

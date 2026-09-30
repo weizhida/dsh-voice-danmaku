@@ -92,9 +92,7 @@ window.__ModuleLoader__.load({
         'fields.mediaKeys.send': '发送',
         'fields.mediaKeys.cancel': '取消',
         'mediaKeys.hint': '游戏里普通按键没反应时（反作弊拦截了键盘钩子），改用媒体键。按一下开始录音，再按一下结束并识别——RegisterHotKey 没有抬起事件，所以这里必须用"按一下切换"而不是按住说话。媒体键会被其它程序共享，所以不会被吞掉。',
-        'mediaKeys.capture': '按一下媒体键',
-        'mediaKeys.capturing': '等待按键…',
-        'mediaKeys.timeout': '没等到媒体键。可以直接在框里手填键名（如 MediaPlayPause）或键码。',
+        'mediaKeys.timeout': '没等到媒体键。可以直接在框里手填键名（如 MediaTrackNext）或键码。',
         'mediaKeys.disabledWarning': '⚠ 媒体键还没启用 —— 上面这个开关是总闸，不打开的话，下面填了也不会生效。点「按一下媒体键」会自动打开它。',
         'mediaKeys.pending': '已启用，但还没收到注册结果（sidecar 可能没在运行，或正在重启）。',
         'mediaKeys.reportTitle': '媒体键注册结果：',
@@ -176,9 +174,7 @@ window.__ModuleLoader__.load({
         'fields.mediaKeys.send': 'Send',
         'fields.mediaKeys.cancel': 'Cancel',
         'mediaKeys.hint': 'Use media keys when ordinary keys do nothing in-game (anti-cheat blocks the keyboard hook). Press once to start recording, press again to stop and recognise — RegisterHotKey reports no key-up, so a toggle is the only reliable interaction. Media keys are shared with other programs, so they are never swallowed.',
-        'mediaKeys.capture': 'Press a media key',
-        'mediaKeys.capturing': 'Waiting for a key…',
-        'mediaKeys.timeout': 'No media key arrived. You can type a key name (e.g. MediaPlayPause) or a key code instead.',
+        'mediaKeys.timeout': 'No media key arrived. You can type a key name (e.g. MediaTrackNext) or a key code instead.',
         'mediaKeys.disabledWarning': '⚠ Media keys are still off — the switch above is the master gate; nothing below takes effect until it is on. Pressing “Press a media key” turns it on for you.',
         'mediaKeys.pending': 'Enabled, but no registration result yet (the sidecar may not be running, or is restarting).',
         'mediaKeys.reportTitle': 'Media key registration: ',
@@ -231,29 +227,41 @@ window.__ModuleLoader__.load({
         key: 'keys',
         fields: [
           { path: ['keys', 'record'], kind: 'text', placeholder: 'F9' },
-          { path: ['keys', 'send'], kind: 'text', placeholder: 'F10' },
-          { path: ['keys', 'cancel'], kind: 'text', placeholder: 'F11' }
+          { path: ['keys', 'send'], kind: 'text', placeholder: 'F11' },
+          { path: ['keys', 'cancel'], kind: 'text', placeholder: 'F10' }
         ]
       },
       {
         key: 'mediaKeys',
         fields: [
           { path: ['mediaKeys', 'enabled'], kind: 'boolean' },
-          // 三个媒体键行都带 `capture`：用户不可能知道 VK_MEDIA_PLAY_PAUSE 是 179，
-          // 让他去查键码表是把这个功能变成只对开发者可用。
-          { path: ['mediaKeys', 'record'], kind: 'text', capture: true, placeholder: 'AudioVolumeMute' },
-          { path: ['mediaKeys', 'send'], kind: 'text', capture: true, placeholder: 'MediaPlayPause' },
-          { path: ['mediaKeys', 'cancel'], kind: 'text', capture: true, placeholder: 'MediaTrackNext' }
+          // ⚠️ 这三个字段原来带 `capture: true`（点了按钮再按一下媒体键自动填入），
+          // 已经去掉 —— 它**原理上就走不通**：媒体键走 HID Consumer Control
+          // （用途页 0x0C），由系统用 `RegisterHotKey` 派发，**浏览器收不到这些键的
+          // keydown**（否则任何网页都能劫持你的播放/暂停键）。实测表现就是点了按钮
+          // 显示"等待按键…"然后毫无反应。
+          //
+          // 现在直接填键名。合法的名字在 src/keys.ts 的媒体键表里，设置页的说明
+          // 文字也列了常用的几个，写键码（如 179）同样可以。
+          { path: ['mediaKeys', 'record'], kind: 'text', placeholder: 'AudioVolumeMute' },
+          { path: ['mediaKeys', 'send'], kind: 'text', placeholder: 'MediaTrackNext' },
+          { path: ['mediaKeys', 'cancel'], kind: 'text', placeholder: 'MediaPlayPause' }
         ]
       },
       {
         key: 'overlay',
         fields: [
           { path: ['overlay', 'enabled'], kind: 'boolean' },
-          { path: ['overlay', 'fontSize'], kind: 'number', suffix: 'px' },
-          { path: ['overlay', 'marginTop'], kind: 'number', suffix: 'px' },
-          { path: ['overlay', 'opacity'], kind: 'number', suffix: '%' },
-          { path: ['overlay', 'anchorXPercent'], kind: 'number', suffix: '%' },
+          // `min`/`max` 必须与 config.ts 里 schema 的范围保持一致。它们有两个作用：
+          //   1. 传给 `<input type=number>`，浏览器原生的校验和上下箭头会遵守；
+          //   2. 把范围显示在界面上（形如 `10–96`）。
+          //
+          // 这不是装饰。schema 会拒绝超范围的值，而拒绝的表现是**"保存没反应"** ——
+          // 用户把字号填成 100（上限 96）时会以为插件坏了。实测踩过。
+          { path: ['overlay', 'fontSize'], kind: 'number', suffix: 'px', min: 10, max: 96 },
+          { path: ['overlay', 'marginTop'], kind: 'number', suffix: 'px', min: 0, max: 2000 },
+          { path: ['overlay', 'opacity'], kind: 'number', suffix: '%', min: 20, max: 100 },
+          { path: ['overlay', 'anchorXPercent'], kind: 'number', suffix: '%', min: 0, max: 100 },
           { path: ['overlay', 'clickThrough'], kind: 'boolean' },
           { path: ['overlay', 'draggable'], kind: 'boolean' }
         ]
@@ -286,20 +294,20 @@ window.__ModuleLoader__.load({
           // 一个没有选择余地的下拉框，和一个永远不会被用到的凭证输入框。
           // 配置里的 `provider` 字段保留着 —— 加第二条通道时把下拉框加回来即可。
           { path: ['channel', 'roomId'], kind: 'text', placeholder: '例如 12345' },
-          { path: ['channel', 'page', 'port'], kind: 'number' },
+          { path: ['channel', 'page', 'port'], kind: 'number', min: 1024, max: 65535 },
           { path: ['channel', 'page', 'token'], kind: 'text' },
           // 长度上限：超过就截断，而且**在确认框里显示的就是截断后的内容**。
           // 判据是 String.length（汉字算 1），用户自己能核对。
-          { path: ['channel', 'maxLength'], kind: 'number', suffix: '字' },
-          { path: ['channel', 'minIntervalMs'], kind: 'number', suffix: 'ms' },
-          { path: ['channel', 'maxPerHour'], kind: 'number', suffix: '条' }
+          { path: ['channel', 'maxLength'], kind: 'number', suffix: '字', min: 20, max: 100 },
+          { path: ['channel', 'minIntervalMs'], kind: 'number', suffix: 'ms', min: 1000, max: 60000 },
+          { path: ['channel', 'maxPerHour'], kind: 'number', suffix: '条', min: 1, max: 600 }
         ]
       },
       {
         key: 'behavior',
         fields: [
           { path: ['behavior', 'consumeKeys'], kind: 'boolean' },
-          { path: ['behavior', 'confirmTimeoutSeconds'], kind: 'number', suffix: '秒' },
+          { path: ['behavior', 'confirmTimeoutSeconds'], kind: 'number', suffix: '秒', min: 0, max: 120 },
           { path: ['behavior', 'soundFeedback'], kind: 'boolean' },
           { path: ['behavior', 'autoSendOnRecognized'], kind: 'boolean' }
         ]
@@ -349,6 +357,9 @@ window.__ModuleLoader__.load({
         border: '0.5px solid ' + COLOR.borderInput, borderRadius: 8
       },
       suffix: { fontSize: 12, color: COLOR.tertiary, minWidth: 24 },
+      // 数字字段的可填范围（`10–96`）。存在的理由是"静默失败"：schema 会拒绝超出
+      // 范围的值，而拒绝看起来就只是"保存没反应"，用户完全无从判断哪里错了。
+      rangeHint: { fontSize: 11, color: COLOR.tertiary, opacity: 0.7, whiteSpace: 'nowrap' },
       checkbox: { width: 16, height: 16, accentColor: COLOR.brand, cursor: 'pointer' },
       error: { margin: '4px 0 0', fontSize: 12, color: COLOR.error },
       footer: {
@@ -385,17 +396,6 @@ window.__ModuleLoader__.load({
       },
       // 「按一下媒体键」：捕获是一个次要动作，用描边按钮；捕获中换成品牌色，
       // 这样"现在在等你按键"这个状态不需要读文字就能看出来。
-      captureButton: {
-        height: 34, padding: '0 12px', fontSize: 13, fontFamily: 'inherit',
-        color: COLOR.text, background: 'transparent',
-        border: '0.5px solid ' + COLOR.borderInput, borderRadius: 8, cursor: 'pointer',
-        whiteSpace: 'nowrap', flexShrink: 0
-      },
-      captureButtonActive: {
-        height: 34, padding: '0 12px', fontSize: 13, fontFamily: 'inherit',
-        color: '#fff', background: COLOR.brand, border: 'none',
-        borderRadius: 8, cursor: 'default', whiteSpace: 'nowrap', flexShrink: 0
-      },
       // 分组说明与注册结果：比字段说明更靠上、更宽，所以单独一个样式。
       sectionHint: {
         margin: '2px 0 0', fontSize: 12, lineHeight: 1.6, color: COLOR.tertiary,
@@ -485,30 +485,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 从一次键盘事件里取出媒体键的写法；不是媒体键则返回 null。
-     *
-     * ## 为什么这件事可以做在浏览器里
-     *
-     * 媒体键最终要走 `RegisterHotKey`（那是唯一能穿过反作弊的通道），但它**在
-     * 设置页里按下时**，浏览器照样收得到 keydown —— 捕获只需要发生一次，就在用户
-     * 配置的时候。这比让用户去查 `VK_MEDIA_PLAY_PAUSE = 179` 现实得多。
-     *
-     * 取值优先用 `event.key`（Chrome 给的是 `MediaPlayPause` / `AudioVolumeMute`
-     * 这类规范名，与宿主 src/keys.ts 的表同名），拿不到规范名时退回数字键码。
-     * 两条路都必须留：有些驱动只给其中一个。
-     */
-    function mediaKeyFromEvent(event) {
-      var code = typeof event.keyCode === 'number' ? event.keyCode : 0;
-      var name = typeof event.key === 'string' ? event.key : '';
-      var inRange = code >= 0xad && code <= 0xb5;
-      if (inRange) {
-        return name.length > 0 && name !== 'Unidentified' ? name : String(code);
-      }
-      if (/^(Media|AudioVolume|LaunchMedia|Browser)/.test(name)) return name;
-      return null;
-    }
-
-    /**
      * 把 sidecar 的注册回执渲染成一句话，没有可说的就返回 null。
      *
      * 回执格式是 `ok=A,B failed=C`（见 sidecar/src/Program.cs）。刻意在客户端
@@ -583,18 +559,6 @@ window.__ModuleLoader__.load({
       };
 
       /**
-       * 媒体键捕获状态。
-       *
-       * 这三个 hook 对**每一行**都无条件调用（包括不是媒体键的行）：React 要求
-       * hook 顺序稳定，把 useState 放进 if 里会在分组渲染顺序变化时炸掉。
-       */
-      var captureState = React_.useState(false);
-      var capturing = captureState[0];
-      var setCapturing = captureState[1];
-      var captureErrorState = React_.useState(null);
-      var captureError = captureErrorState[0];
-      var setCaptureError = captureErrorState[1];
-      /**
        * 「自定义…」的展开状态（只给 `kind: 'choice'` 用）。
        *
        * 初始是否展开由"当前值在不在候选里"决定 —— 值不在候选里（比如用户手填过
@@ -603,53 +567,6 @@ window.__ModuleLoader__.load({
       var customState = React_.useState(false);
       var customOpen = customState[0];
       var setCustomOpen = customState[1];
-
-      React_.useEffect(function () {
-        if (!capturing) return undefined;
-
-        var onKeyDown = function (event) {
-          var captured = mediaKeyFromEvent(event);
-          // 不是媒体键就继续等：用户可能先摸到键盘才想起该按耳机上的键。
-          if (captured === null) return;
-          // 拦下默认行为：否则这次按键会顺手把系统音量改了或切了歌，
-          // 用户会以为"点一下按钮把我的音乐弄没了"。
-          if (typeof event.preventDefault === 'function') event.preventDefault();
-          update(captured);
-          // 顺手打开总开关。用户的动作已经表明意图（"我要用这个键"），再让他去
-          // 别处找一个必须打开的复选框是多余的步骤 —— 而漏掉那一步的表现是
-          // "明明配好了，按下去毫无反应"（实测就是这么发生的）。
-          onDraft(['mediaKeys', 'enabled'], true);
-          setCapturing(false);
-          setCaptureError(null);
-        };
-
-        // 用捕获阶段：设置页其它地方若也监听 keydown，不能被它们先吃掉。
-        globalThis.addEventListener('keydown', onKeyDown, true);
-        // 超时兜底。没有它，用户点了按钮却按了普通键时会一直卡在"等待按键"，
-        // 而且看起来像是页面坏了。
-        var timer = globalThis.setTimeout(function () {
-          setCapturing(false);
-          setCaptureError(t('mediaKeys.timeout'));
-        }, 8000);
-
-        return function () {
-          globalThis.removeEventListener('keydown', onKeyDown, true);
-          globalThis.clearTimeout(timer);
-        };
-      }, [capturing]);
-
-      var captureButton = null;
-      if (field.capture === true) {
-        captureButton = h('button', {
-          type: 'button',
-          style: capturing ? CSS.captureButtonActive : CSS.captureButton,
-          disabled: disabled || busy || capturing,
-          onClick: function () {
-            setCaptureError(null);
-            setCapturing(true);
-          }
-        }, capturing ? t('mediaKeys.capturing') : t('mediaKeys.capture'));
-      }
 
       var control;
       if (field.kind === 'select') {
@@ -686,6 +603,10 @@ window.__ModuleLoader__.load({
             type: 'number',
             style: CSS.input,
             value: current === undefined || current === null ? '' : String(current),
+            // 范围来自 SECTIONS，必须与 config.ts 的 schema 一致。渲染成原生属性，
+            // 让上下箭头和浏览器自带的校验都遵守它。
+            min: field.min,
+            max: field.max,
             disabled: disabled || busy,
             onChange: function (event) {
               var raw = event.target.value;
@@ -694,7 +615,11 @@ window.__ModuleLoader__.load({
               if (!isNaN(parsed)) update(parsed);
             }
           }),
-          field.suffix !== undefined ? h('span', { style: CSS.suffix }, field.suffix) : null
+          field.suffix !== undefined ? h('span', { style: CSS.suffix }, field.suffix) : null,
+          // 把范围写出来。没有它，超范围的输入就只是"保存没反应"，用户无从判断。
+          field.min !== undefined && field.max !== undefined
+            ? h('span', { style: CSS.rangeHint }, field.min + '–' + field.max)
+            : null
         );
       } else if (field.secret === true) {
         // 密钥类字段。宿主把它标记为 secret，下发的描述里**只有"是否已设置"、
@@ -837,16 +762,12 @@ window.__ModuleLoader__.load({
           disabled: disabled || busy,
           onChange: function (event) { update(event.target.value); }
         });
-        // 媒体键行多一个捕获按钮：用户不可能知道 VK_MEDIA_PLAY_PAUSE 是 179。
-        control = field.capture === true
-          ? h('div', { style: CSS.control }, textInput, captureButton)
-          : textInput;
+        control = textInput;
       }
 
       return h('div', { style: CSS.row },
         h('div', { style: CSS.labelWrap },
-          h('div', { style: CSS.label }, t('fields.' + key)),
-          captureError !== null ? h('div', { style: CSS.fieldHint }, captureError) : null
+          h('div', { style: CSS.label }, t('fields.' + key))
         ),
         control
       );
@@ -1239,7 +1160,7 @@ window.__ModuleLoader__.load({
      * 必须确认，因为**注入一个不存在的命名空间会让整个插件加载失败**，
      * 用户会看到设置页直接消失。
      */
-    var inject = ['slots', 'locale', 'settingsScope', 'remote.settings'];
+    var inject = ['slots', 'locale', 'configForms', 'remote.settings'];
 
     function apply(ctx) {
       // 照常注册字典：这是官方接口，该调就调；将来那条链路生效时本页跟着有正确语言。
@@ -1260,7 +1181,12 @@ window.__ModuleLoader__.load({
       // 一页承载全部分组。分成多个导航项会让左侧列表被本插件占满，
       // 而这些配置是同一件事的不同侧面，放在一起更符合直觉。
       ctx.slots.inject('settings.section', function () {
-        var scope = ctx.settingsScope.bind({ namespace: NAMESPACE });
+        // DSH 0.2+ 的设置访问入口：`configForms.get(命名空间)` 直接返回一个 form
+        // 控制器。旧版是按命名空间"绑定"出一个设置作用域对象，那个服务在 0.2 里
+        // 被整个移除 —— 插件会因等待它而永久 pending，连带把 web boot 卡死（真实
+        // 踩过一次，整个应用起不来）。两版的 form 接口高度一致：getSnapshot /
+        // subscribe / mutate 同名同形，快照字段也相同，所以下游组件不用改。
+        var scope = ctx.configForms.get(NAMESPACE);
         return ctx.slots.register({
           name: 'settings.section',
           id: 'voice-danmaku',

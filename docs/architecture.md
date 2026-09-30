@@ -156,7 +156,7 @@ export interface DanmakuChannel {
         F9                      F9                    识别完成
 idle ─────────► recording ─────────► recognizing ─────────► confirm
   ▲                 │                      │                    │
-  │                 │ F11 取消             │ 失败               │ F10 发送
+  │                 │ F10 取消             │ 失败               │ F11 发送
   │                 ▼                      ▼                    ▼
   └────────────── cancel ◄─────────────────┘                 sending
                                                                │

@@ -45,11 +45,24 @@ const plugin = await import(pathToFileURL(entry).href).catch((cause) => {
 
 // --- 入口契约 ---------------------------------------------------------------
 check(plugin.name === 'voice-danmaku', '导出 name', plugin.name);
-check(Array.isArray(plugin.inject) && plugin.inject.includes('settings'),
-  '导出 inject 且声明依赖 settings', JSON.stringify(plugin.inject));
+check(plugin.inject === undefined || !plugin.inject.includes('settings'),
+  '不再声明 settings 依赖（0.2 起配置走 cordis 原生 Config）',
+  JSON.stringify(plugin.inject));
 check(typeof plugin.apply === 'function', '导出 apply 函数');
 check(plugin.Config !== undefined && typeof plugin.Config === 'function',
   '导出 Config（schemastery schema）');
+
+// 这一条是整套检查里最要紧的：Host 侧 `dsh-settings` 的 describe() 用
+// `volatileForm(schema)` 过滤条目 —— **一个 volatile 字段都没有的插件根本不会进
+// 设置镜像**。客户端于是找不到自己的命名空间，界面显示"设置服务当前不可用"，
+// 而且没有任何报错，是纯静默失败。
+//
+// 它也确实非常容易静默失效：插件的本地 schemastery 是 3.18.2、没有 `.volatile()`，
+// 只写 `.volatile()` 的实现在真机上拿到的也是这份（link: 安装时 Node 先命中插件
+// 自己的 node_modules），标记根本写不上。所以断言要落到**产物**上，而不是
+// "我们调用过某个方法"。
+check(JSON.stringify(plugin.Config.toJSON()).includes('"volatile":true'),
+  'Config schema 里带 volatile 标记（否则不会出现在设置界面里）');
 
 // --- 设置 schema ------------------------------------------------------------
 let resolved;
@@ -67,8 +80,8 @@ if (resolved !== undefined) {
       `默认值包含 ${section} 段`);
   }
   check(resolved.keys?.record === 'F9', '默认录音键是 F9', resolved.keys?.record);
-  check(resolved.keys?.send === 'F10', '默认发送键是 F10', resolved.keys?.send);
-  check(resolved.keys?.cancel === 'F11', '默认取消键是 F11', resolved.keys?.cancel);
+  check(resolved.keys?.send === 'F11', '默认发送键是 F11', resolved.keys?.send);
+  check(resolved.keys?.cancel === 'F10', '默认取消键是 F10', resolved.keys?.cancel);
   // 媒体键默认关闭：它们是与系统、音乐播放器共享的键，不主动去抢。
   check(resolved.mediaKeys?.enabled === false, '媒体键默认关闭');
   check(resolved.mediaKeys?.record === 'AudioVolumeMute', '默认录音媒体键是静音键',
@@ -150,14 +163,14 @@ const settingsCtx = {
         try {
           options.validate({
             ...resolved,
-            keys: { record: 'F9', send: 'F9', cancel: 'F11' }
+            keys: { record: 'F9', send: 'F9', cancel: 'F10' }
           });
           check(false, '校验能拦住"同一个键配两个动作"', '冲突配置没有被拒绝');
         } catch {
           check(true, '校验能拦住"同一个键配两个动作"');
         }
         try {
-          options.validate({ ...resolved, keys: { record: '不存在的键', send: 'F10', cancel: 'F11' } });
+          options.validate({ ...resolved, keys: { record: '不存在的键', send: 'F11', cancel: 'F10' } });
           check(false, '校验能拦住无法识别的按键名');
         } catch {
           check(true, '校验能拦住无法识别的按键名');
@@ -169,7 +182,7 @@ const settingsCtx = {
         try {
           options.validate({
             ...resolved,
-            mediaKeys: { enabled: false, record: 'MediaPlayPause', send: 'MediaPlayPause', cancel: 'MediaTrackNext' }
+            mediaKeys: { enabled: false, record: 'MediaTrackNext', send: 'MediaTrackNext', cancel: 'MediaPlayPause' }
           });
           check(true, '媒体键未启用时不参与校验（默认值不拦人）');
         } catch (cause) {
@@ -180,7 +193,7 @@ const settingsCtx = {
         try {
           options.validate({
             ...resolved,
-            mediaKeys: { enabled: true, record: 'MediaPlayPause', send: 'MediaPlayPause', cancel: 'MediaTrackNext' }
+            mediaKeys: { enabled: true, record: 'MediaTrackNext', send: 'MediaTrackNext', cancel: 'MediaPlayPause' }
           });
           check(false, '校验能拦住重复的媒体键');
         } catch {
@@ -190,9 +203,9 @@ const settingsCtx = {
         try {
           options.validate({
             ...resolved,
-            mediaKeys: { enabled: true, record: 'AudioVolumeMute', send: 'MediaPlayPause', cancel: 'MediaTrackNext' }
+            mediaKeys: { enabled: true, record: 'AudioVolumeMute', send: 'MediaTrackNext', cancel: 'MediaPlayPause' }
           });
-          check(true, '合法的媒体键配置被接受（AudioVolumeMute/MediaPlayPause/MediaTrackNext）');
+          check(true, '合法的媒体键配置被接受（AudioVolumeMute/MediaTrackNext/MediaPlayPause）');
         } catch (cause) {
           check(false, '合法的媒体键配置被接受', cause.message);
         }
@@ -202,6 +215,7 @@ const settingsCtx = {
   }
 };
 
+const handledEvents = [];
 const fakeCtx = {
   // 记录插件声明的依赖，并**立即**触发回调：真实 cordis 在服务就绪时也会这样调。
   inject: (services, callback) => {
@@ -215,23 +229,66 @@ const fakeCtx = {
     if (typeof disposer !== 'function') {
       check(false, 'effect 回调返回了 disposer 函数');
     }
+  },
+  // 记录事件订阅。插件靠 `internal/update` 感知配置变更 —— 这是新版 DSH 里
+  // "改设置生效"的**唯一**途径（改配置不会重载插件），所以必须记下来并断言，
+  // 否则"设置改了没反应"那个 bug 会再回来。
+  on: (event, handler) => {
+    handledEvents.push({ event, handler });
   }
 };
 
+// 新版把配置作为 apply 的**第二个参数**交进来（旧版是插件自己拿去 settings 服务
+// 注册）。直接复用上面已经解析好的默认配置 —— 那正是加载器会交给插件的东西。
 try {
-  plugin.apply(fakeCtx);
+  plugin.apply(fakeCtx, resolved);
   check(true, 'apply 执行无异常');
 } catch (cause) {
   check(false, 'apply 执行无异常', cause.message);
 }
 
-check(injectCalls.some((list) => list.includes('settings')),
-  'apply 里声明了对 settings 的依赖');
-check(registered.length === 1, '调用了 settings.register 一次', `实际 ${registered.length} 次`);
-check(registered[0]?.ns === 'voice-danmaku', '设置的命名空间正确', registered[0]?.ns);
-check(registered[0]?.options?.applies === 'live',
-  '声明为 live 生效（改设置不需要重启）', registered[0]?.options?.applies);
-check(watchInstalled, '安装了设置变更监听（改按键能立即生效）');
+// 必须订阅配置更新事件。没有它，用户在设置页做的任何改动都不会生效
+// （改配置不重载插件，插件只会在启动时读到一次配置）。
+check(handledEvents.some((e) => e.event === 'internal/update'),
+  '订阅了配置更新事件（否则改设置不会生效）',
+  handledEvents.map((e) => e.event).join(', '));
+
+// 「手动启动」那条路径必须单独跑一遍：上面的默认配置里 `launchToken` 是 0，
+// 而只有它变化时插件才会**同步**调用 `startSidecar()` → `launch()`。
+//
+// 这条断言防的是两个真实故障（都实测发生过）：
+//   1. `let launching` 曾被声明在 `launch()` 旁边（函数中段），在初始化之前就被
+//      读到 —— 抛 TDZ "Cannot access 'launching' before initialization"；
+//   2. 配置更新曾经完全没有被订阅，于是设置页的「启动」按钮点了等于没点。
+// 两者合起来的症状就是"随 DSH 启动是好的，但关掉之后点启动没反应"。
+try {
+  const manualStartConfig = new plugin.Config({ behavior: { launchToken: 1 } });
+  plugin.apply(fakeCtx, manualStartConfig);
+  check(true, '「手动启动」路径能走通（首次加载即带 launchToken 不抛错）');
+} catch (cause) {
+  check(false, '「手动启动」路径能走通（首次加载即带 launchToken 不抛错）', cause.message);
+}
+
+// 模拟"用户点了设置页的「启动」"：配置更新事件带着新的 launchToken 送进来。
+// 首次加载只记基线不启动，所以这次必须真的触发一次启动。
+try {
+  const updater = handledEvents.find((e) => e.event === 'internal/update');
+  if (updater === undefined) {
+    check(false, '配置更新能触发手动启动', '没有订阅 internal/update');
+  } else {
+    updater.handler(new plugin.Config({ behavior: { launchToken: 2 } }));
+    check(true, '配置更新能触发手动启动（点「启动」的等价路径）');
+  }
+} catch (cause) {
+  check(false, '配置更新能触发手动启动（点「启动」的等价路径）', cause.message);
+}
+
+// 新版的两条硬约束：不再依赖 settings 服务、配置由 cordis 注入。
+check(plugin.inject === undefined || !plugin.inject.includes('settings'),
+  '不再声明 settings 依赖（0.2 起配置走 cordis 原生 Config）',
+  JSON.stringify(plugin.inject));
+check(registered.length === 0,
+  '没有调用 settings.register（该 API 在新版已不提供服务面）', `实际 ${registered.length} 次`);
 check(effectRegistered, '注册了卸载清理逻辑');
 
 // 让插件内部的异步启动有机会安静失败：它找不到 sidecar 时会走"现场编译"，

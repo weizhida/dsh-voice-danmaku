@@ -151,9 +151,15 @@ const fakeCtx = {
     // 客户端现在通过 getSnapshot().active 选择语言；替身要支持它。
     getSnapshot: () => ({ active: 'zh', revision: 1, locales: [] })
   },
-  settingsScope: {
-    bind(spec) {
-      boundNamespaces.push(spec.namespace);
+  // DSH 0.2+ 的设置入口：`configForms.get(命名空间)` 直接返回 form 控制器。
+  // 旧版是 `settingsScope.bind({ namespace })` —— 那个服务在 0.2 里被整个移除，
+  // 插件会因为等待它而永远 pending，连带把 web boot 卡死（真实踩过）。
+  //
+  // 快照形状两版一致（status/value/base/user/revision/writable/mode），
+  // 所以这里的替身只需要换入口名，快照内容照旧。
+  configForms: {
+    get(namespace) {
+      boundNamespaces.push(namespace);
       return {
         getSnapshot: () => ({
           status: 'ready',
@@ -165,8 +171,8 @@ const fakeCtx = {
           mode: 'host'
         }),
         subscribe: () => () => {},
-        load: async () => {},
         set: async () => {},
+        unset: async () => {},
         mutate: async (ops) => { mutations.push(ops); }
       };
     }
@@ -186,9 +192,9 @@ const fakeCtx = {
 const boundNamespaces = [];
 const mutations = [];
 const sampleValue = {
-  keys: { record: 'F9', send: 'F10', cancel: 'F11' },
+  keys: { record: 'F9', send: 'F11', cancel: 'F10' },
   mediaKeys: {
-    enabled: true, record: 'AudioVolumeMute', send: 'MediaPlayPause', cancel: 'MediaTrackNext'
+    enabled: true, record: 'AudioVolumeMute', send: 'MediaTrackNext', cancel: 'MediaPlayPause'
   },
   overlay: {
     enabled: true, fontSize: 26, padding: 18, marginTop: 0, opacity: 88,
@@ -225,7 +231,7 @@ const sampleValue = {
     secretStatus: ['asr.apiKey'],
     // 宿主侧回写的媒体键注册结果。刻意造一个"有键没注册上"的情形：
     // 那正是用户会遇到、而且不显示出来就无从排查的情形。
-    mediaKeysReport: 'ok=AudioVolumeMute failed=MediaTrackNext'
+    mediaKeysReport: 'ok=AudioVolumeMute failed=MediaPlayPause'
   }
 };
 
@@ -413,31 +419,30 @@ check(!renderedHtml.includes('SESSDATA') && !renderedHtml.includes('sk-'),
 
 // --- 8. 媒体键 --------------------------------------------------------------
 //
-// 媒体键要解决的问题是"游戏里普通按键完全没反应"，而它的门槛是
-// **用户不可能知道 VK_MEDIA_PLAY_PAUSE 是 179**。所以捕获按钮不是锦上添花，
-// 它是这个功能可用的前提 —— 少了它，媒体键只对能查键码表的人可用。
-check(renderedHtml.includes('按一下媒体键'),
-  '媒体键行带捕获按钮（用户不必知道键码）');
-check(/function mediaKeyFromEvent\(/.test(clientSource) &&
-      /mediaKeyFromEvent\(event\)/.test(clientSource),
-  '捕获按钮把按下的键转成配置值');
-check(/field\.capture === true/.test(clientSource),
-  '捕获按钮只出现在带 capture 标记的字段上');
+// ⚠️ 这里原来检查"媒体键行带捕获按钮"（点按钮、再按一下媒体键自动填入）。
+// 那个设计**原理上走不通**，已整体移除：媒体键走 HID Consumer Control
+// （用途页 0x0C），由系统用 `RegisterHotKey` 派发，**浏览器收不到这些键的
+// keydown**（否则任何网页都能劫持你的播放/暂停键）。实测表现就是点了按钮
+// 显示"等待按键…"，然后按什么都没反应。
+//
+// 所以断言反过来：三个媒体键都是纯文本输入，且不能再出现捕获按钮 —— 免得哪天
+// 那段 UI 被重新加回来，而它只会静默地不工作。
+check(!renderedHtml.includes('按一下媒体键') && !renderedHtml.includes('等待按键'),
+  '媒体键行没有捕获按钮（浏览器收不到媒体键，那个按钮不会工作）');
+check(!/field\.capture/.test(clientSource) && !/mediaKeyFromEvent/.test(clientSource),
+  '客户端没有残留的捕获代码');
 
 // 注册失败是静默的（键被别的程序占用），必须显示出来，否则用户只会看到
 // "按这个键没反应"而没有任何线索。
-check(renderedHtml.includes('MediaTrackNext') && renderedHtml.includes('未注册'),
+check(renderedHtml.includes('MediaPlayPause') && renderedHtml.includes('未注册'),
   '媒体键注册失败会显示在设置页上');
 
-// 捕获按钮必须顺手打开总开关，而总开关没打开时必须给出警告。
-// 这两条来自一次真实的排查：用户填好了键、点了保存、按下去毫无反应 ——
-// 因为总开关没打开，而界面上没有任何地方说明"不打开就不生效"。
-check(/onDraft\(\['mediaKeys', 'enabled'\], true\)/.test(clientSource),
-  '捕获到媒体键时顺手打开总开关（否则配了也不生效）');
+// 总开关没打开时必须给出警告。这一条来自一次真实的排查：用户填好了键、点了保存、
+// 按下去毫无反应 —— 因为总开关没打开，而界面上没有任何地方说明"不打开就不生效"。
 check(/effective\(\['mediaKeys', 'enabled'\]\) !== true/.test(clientSource),
   '总开关没打开时给出警告（不是静默失效）');
 // 复选框的勾选状态必须现读 effective()：本地 state 只在挂载时取值，
-// 捕获按钮改了总开关之后它会停在"看起来没打开"的样子。
+// 别处改了同一字段之后它会停在"看起来没打开"的样子。
 check(/checked: effective\(field\.path\) === true/.test(clientSource),
   '复选框的勾选状态在渲染时现读（别处改了同一字段也能跟着变）');
 

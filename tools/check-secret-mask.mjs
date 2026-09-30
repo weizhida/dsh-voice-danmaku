@@ -79,13 +79,16 @@ function renderWith(secretStatus) {
   const fakeCtx = {
     effect: (body) => { const d = body(); return typeof d === 'function' ? d : () => {}; },
     locale: { register: () => () => {}, bind: () => fakeT, getSnapshot: () => ({ active: 'zh' }) },
-    settingsScope: {
-      bind: () => ({
+    // DSH 0.2+ 的设置入口（旧版的 settingsScope 服务已被移除）。
+    configForms: {
+      get: () => ({
         getSnapshot: () => ({
           status: 'ready', value, base: undefined, user: undefined,
           revision: 1, writable: true, mode: 'host'
         }),
         subscribe: () => () => {},
+        set: async () => {},
+        unset: async () => {},
         mutate: async () => {}
       })
     },
@@ -241,8 +244,8 @@ check(/\.subscribe\(function/.test(clientSrc),
   '组件订阅了设置快照（快照变化会触发重渲染）');
 check(/scope: scope/.test(clientSrc),
   '把 scope 交给组件（而不是只传一次快照）');
-check(!/settingsScope\.load/.test(clientSrc),
-  '没有再调用不存在的 settingsScope.load()');
+check(!/settingsScope/.test(clientSrc),
+  '没有再用 DSH 0.2 已移除的 settingsScope 服务');
 
 console.log(failures === 0
   ? '\n[mask] 遮罩归属校验全部通过。'
