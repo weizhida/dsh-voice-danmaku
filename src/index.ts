@@ -478,7 +478,7 @@ export function apply(ctx: Context, config: VoiceDanmakuConfig): void {
       // 用户从托盘菜单点的退出：必须尊重，不能自愈重启。
       // 否则表现为"点了退出它又自己冒出来，根本关不掉"。
       if (intentional) {
-        log('sidecar 已按用户要求退出。要恢复语音功能，请在 设置 → 语音弹幕 点「启动」。');
+        log('sidecar 已按用户要求退出。要恢复语音功能，请重启 DSH。');
         return;
       }
 

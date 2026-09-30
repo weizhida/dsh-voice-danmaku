@@ -962,9 +962,18 @@ window.__ModuleLoader__.load({
         });
       };
 
-      // 「启动」按钮不改配置，而是把 launchToken 递增一次。宿主监听设置变化，
-      // 看到值变了就拉起 sidecar。这样不用引入 remote 命名空间（那对一个
-      // 启停动作来说太重），也复用了已有的设置热加载路径。
+      // 「启动」按钮 —— 暂时移除，原因如下（保留代码是为了将来能捡回来）。
+      //
+      // 它的机制是"把配置里的 launchToken 递增一次，让宿主在配置变化时拉起
+      // sidecar"，因为新版 DSH 里没有别的"让插件做件事"的通道。但实测这条路要经过
+      // 「写配置 → DSH 应用配置 → 重载插件」，端到端延迟 **12–79 秒**。对用户来说
+      // 那就是"点了没反应"（右下角十几秒都不出图标，媒体键还是系统默认的静音）。
+      //
+      // 真正的解法是走 `ctx.remote` 自定义远程通道（点一下立刻生效），但那是个中等
+      // 规模的改动、需要先摸清 remote 的定义格式，当前不排期。与其留一个按了要等
+      // 一分多钟的按钮骗人，不如先拿掉 —— 需要启动时重启 DSH 即可。
+      //
+      // 宿主那半边的 launchToken 逻辑**留着**（不影响功能），捡回按钮时不用重写。
       var requestLaunch = function () {
         var current = effective(['behavior', 'launchToken']);
         var next = (typeof current === 'number' ? current : 0) + 1;
@@ -990,14 +999,7 @@ window.__ModuleLoader__.load({
           h('div', { style: CSS.controlHint }, t('control.hint'))
         ),
         h('div', { style: CSS.controlActions },
-          h('button', {
-            type: 'button',
-            style: launchBusy || disabled
-              ? Object.assign({}, CSS.button, CSS.buttonDisabled)
-              : CSS.button,
-            disabled: launchBusy || disabled,
-            onClick: requestLaunch
-          }, launchBusy ? t('control.starting') : t('control.start')),
+          // 这里原来有一个「启动」按钮（见上面 requestLaunch 的说明）。
           h('label', { style: CSS.switchLabel },
             h('input', {
               type: 'checkbox',
