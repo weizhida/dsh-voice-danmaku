@@ -111,6 +111,106 @@ function stripTrailingPunctuation(text: string): string {
   return text.replace(TRAILING_PUNCTUATION, '');
 }
 
+/**
+ * 从 WAV 字节里读出音频时长（毫秒）。读不出就返回 `undefined`。
+ *
+ * ## 为什么要关心时长
+ *
+ * 因为"录音太短"是识别结果不可信的头号原因。实测（Qwen3-ASR + 硅基流动）：
+ *
+ *   * 完整语音（约 3 秒）→ 正确文本；
+ *   * 静音 1 秒         → `text` 为空（正常）；
+ *   * 静音 0.2–0.3 秒   → **稳定幻觉出「嗯。」**，而且是确定性的（同样音频必出同样结果）；
+ *   * 语音被截到 0.3 秒 → 服务端直接 HTTP 500、响应体为空。
+ *
+ * 用户的操作节奏一快（"按一下识别然后立马发送"），录进去的就只有零点几秒，
+ * 于是浮层上会冒出一个莫名其妙的短词。日志里带上时长，翻一眼就能定案。
+ *
+ * 从头里读采样率而不是写死 22050：录音层的格式是可换的，写死会在某天悄悄失准。
+ */
+function wavDurationMs(bytes: Uint8Array): number | undefined {
+  if (bytes.byteLength < 44) return undefined;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // 'RIFF' / 'WAVE'（大端 ASCII）
+  if (view.getUint32(0, false) !== 0x52494646) return undefined;
+  if (view.getUint32(8, false) !== 0x57415645) return undefined;
+  const channels = view.getUint16(22, true);
+  const sampleRate = view.getUint32(24, true);
+  const bitsPerSample = view.getUint16(34, true);
+  const dataSize = view.getUint32(40, true);
+  const bytesPerFrame = (bitsPerSample / 8) * channels;
+  if (bytesPerFrame <= 0 || sampleRate <= 0) return undefined;
+  return Math.round((dataSize / bytesPerFrame / sampleRate) * 1000);
+}
+
+/** 把时长渲染成日志里好读的样子。 */
+function describeDuration(bytes: Uint8Array): string {
+  const ms = wavDurationMs(bytes);
+  return ms === undefined ? '时长未知' : `${ms}ms`;
+}
+
+/**
+ * 读出 WAV 的响度统计：均方根（RMS）与峰值。读不出就返回 `undefined`。
+ *
+ * ## 为什么要它
+ *
+ * 用户"什么都没说、连麦克风都收起来了"，模型照样返回 `"No."` 或 `"嗯。"` —— 而
+ * 我构造的**数字静音**（全 0）和**白噪声**都稳定返回空串。差别在于真实底噪是有
+ * 结构的（电流声、低频嗡声、周期性起伏），比白噪声"更像语音"，模型于是编一个
+ * 最短的应答词交差。
+ *
+ * 所以光看**时长**区分不了"没说话"和"说了话" —— 实测两种都会出现 1999ms。
+ * 需要的是**响度**：
+ *
+ *   * `rms` 反映整体能量：正常说话的 RMS 通常在几百到几千（16 位满量程 32768），
+ *     而底噪往往只有个位数到几十；
+ *   * `peak` 能区分"一直很轻"和"偶尔有一下响声"。
+ *
+ * 有了这两个数字，才能定一条"没听到声音"的线，把无语音的音频拦在请求之前。
+ */
+function wavLevels(bytes: Uint8Array): { rms: number; peak: number } | undefined {
+  if (bytes.byteLength < 44) return undefined;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, false) !== 0x52494646) return undefined;
+  if (view.getUint32(8, false) !== 0x57415645) return undefined;
+  // 只处理插件自己产出的格式（16 位 PCM）。换成别的格式时直接放弃，而不是给出一个
+  // 算错的数字 —— 日志里的假数据比没有数据更坏。
+  if (view.getUint16(34, true) !== 16) return undefined;
+
+  const dataSize = view.getUint32(40, true);
+  const count = Math.floor(Math.min(dataSize, bytes.byteLength - 44) / 2);
+  if (count <= 0) return undefined;
+
+  let sumSquares = 0;
+  let peak = 0;
+  for (let i = 0; i < count; i += 1) {
+    const sample = view.getInt16(44 + i * 2, true);
+    sumSquares += sample * sample;
+    const abs = Math.abs(sample);
+    if (abs > peak) peak = abs;
+  }
+  return { rms: Math.round(Math.sqrt(sumSquares / count)), peak };
+}
+
+/** 把一段音频渲染成日志里的"时长 + 电平"。 */
+function describeAudio(bytes: Uint8Array): string {
+  const time = describeDuration(bytes);
+  const levels = wavLevels(bytes);
+  return levels === undefined ? time : `${time}，电平 ${levels.rms}/${levels.peak}`;
+}
+
+/**
+ * 低于这个 RMS 就认为"这一段里没有人说话"，直接把请求拦在本地。
+ *
+ * 依据是实测值，不是拍脑袋：真机静音是 0–1，而说话（哪怕只是"喂喂喂"）是 93 以上。
+ * 取 20 让两头各留一个数量级的余量 —— 既不会漏掉静音（0–1 离 20 有 20 倍），
+ * 也不会误伤小声说话（93 离 20 有 4.6 倍）。
+ *
+ * 之所以必须拦：模型在这种音频上**不会返回空**，而是编一个最简短的应答词
+ * （实测稳定复现"No."、"嗯。"），浮层上就冒出一个用户无法解释的词。
+ */
+const SILENCE_RMS_THRESHOLD = 20;
+
 export class VoiceDanmakuMachine {
   private current: MachineState = 'idle';
   private pendingText = '';
@@ -257,7 +357,9 @@ export class VoiceDanmakuMachine {
       this.showTransient('✓ 已发送', text, ACCENT.sent);
       this.pendingText = '';
       this.current = 'idle';
-      this.deps.notify(`已发送：${text}`, 'info');
+      // 只记长度、不记内容：日志是落在磁盘上的东西，用户说过的话不该被顺手抄一份
+      // 进去。排查需要回答的是"发没发出去"，而不是"发了什么"。
+      this.deps.notify(`已发送（${text.length} 字）`, 'info');
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
       this.deps.sound('error');
@@ -311,6 +413,37 @@ export class VoiceDanmakuMachine {
       return;
     }
 
+    // 本地先看一眼电平：**没有人说话就不发请求**。
+    //
+    // ## 为什么必须有这一步
+    //
+    // 实测（Qwen3-ASR + 硅基流动，本机日志）：麦克风收起、整段没人说话时，它的
+    // 返回**不是空字符串，而是一个编出来的短词** —— "No."、"嗯。"，而且是确定性的
+    // （同样的音频每次都是同一个词）。对照实验：
+    //
+    //   * 全零静音（我构造的）    → `text: ""`，正常；
+    //   * 真机静音（RMS 0、峰值 1）→ `"No."`。
+    //
+    // 差别只有一个最低有效位：**只要不是全零，模型就不肯承认"没声音"，一定要吐点
+    // 什么出来**。于是浮层上冒出一个莫名其妙的词，用户完全无从判断它从哪来。
+    //
+    // 阈值定在 20：真机实测静音是 0–1，而说话（哪怕是"喂喂喂"这种爆破音）是 93 以上，
+    // 两头都留了足够余量。真被误拦时日志里会写明"电平过低未发送"，一眼可查。
+    const levels = wavLevels(audio);
+    if (levels !== undefined && levels.rms < SILENCE_RMS_THRESHOLD) {
+      this.toIdle();
+      this.showTransient(
+        '没有听到声音',
+        '麦克风没收到声音 · 检查它是否被静音或收起了',
+        ACCENT.unknown
+      );
+      this.deps.notify(
+        `音频电平过低（${describeAudio(audio)}，阈值 ${SILENCE_RMS_THRESHOLD}），未发送识别请求`,
+        'warn'
+      );
+      return;
+    }
+
     let text: string;
     try {
       text = (await this.deps.transcribe(audio)).trim();
@@ -323,9 +456,17 @@ export class VoiceDanmakuMachine {
       // 什么也没发生"—— 他无从知道是余额不足、密钥失效还是网络不通，更不会去翻日志。
       // 欠费正是这种情况：真正该做的事（充值）在日志里，而他永远看不到。
       this.showTransient('✗ 识别失败', reason, ACCENT.failed, ERROR_TRANSIENT_MS);
-      this.deps.notify(`识别失败：${reason}`, 'error');
+      this.deps.notify(`识别失败（音频 ${describeAudio(audio)}）：${reason}`, 'error');
       return;
     }
+
+    // 把"时长 + 电平 + 结果长度"记进日志。
+    //
+    // ⚠️ 刻意**只记长度、不记内容**：日志是落在磁盘上的东西，用户说过的话不该被
+    // 顺手抄一份存进去。而"空 / N 字"已经够回答排查问题了 —— 幻觉的典型特征是
+    // 极短（1–3 个字），"识别成功但结果为空"与"识别成功且有内容"也一眼可辨。
+    const shape = text.length === 0 ? '空' : `${text.length} 字`;
+    this.deps.notify(`识别结果（音频 ${describeAudio(audio)}）：${shape}`, 'info');
 
     // 去掉句末标点，**在显示给用户之前**做。
     //
@@ -348,7 +489,7 @@ export class VoiceDanmakuMachine {
       // 他无法判断是没录到、识别成空、还是插件坏了。
       this.toIdle();
       this.showTransient('没有听到声音', '可能说得太短，或麦克风没收到 · 再试一次', ACCENT.unknown);
-      this.deps.notify('没有识别到内容', 'warn');
+      this.deps.notify(`没有识别到内容（音频 ${describeAudio(audio)}）`, 'warn');
       return;
     }
 
